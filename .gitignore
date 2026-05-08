@@ -1,0 +1,32 @@
+# Build outputs
+/build/
+/mcp-guard
+*.o
+*.a
+*.so
+*.d
+
+# Generated libbpf artifacts
+*.skel.h
+
+# Runtime artifacts
+*.log
+*.pid
+core
+core.*
+/mcp-guard.sock
+
+# Editor and OS noise
+.DS_Store
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# CMake build trees
+/cmake-build-*/
+/CMakeFiles/
+/CMakeCache.txt
+/cmake_install.cmake
+/compile_commands.json

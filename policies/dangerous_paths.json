@@ -1,0 +1,19 @@
+{
+  "rules": [
+    {
+      "name": "shadow-file",
+      "value": "/etc/shadow",
+      "action": "deny"
+    },
+    {
+      "name": "root-private",
+      "value": "/root/",
+      "action": "deny"
+    },
+    {
+      "name": "ssh-private-keys",
+      "value": "/home/jihyo/.ssh/",
+      "action": "deny"
+    }
+  ]
+}

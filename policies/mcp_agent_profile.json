@@ -1,0 +1,5 @@
+{
+  "profile": "default-mcp-agent",
+  "mode": "system-wide",
+  "notes": "Initial PoC applies policies system-wide. Process scoping can be added by matching comm/cgroup."
+}
