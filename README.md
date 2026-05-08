@@ -389,6 +389,7 @@ sudo ./tests/test_execve.sh
 sudo ./tests/test_file_access.sh
 sudo ./tests/test_socket_connect.sh
 sudo ./tests/test_policy_update.sh
+sudo ./tests/test_l1_cache.sh
 ```
 
 The tests verify:
@@ -397,6 +398,7 @@ The tests verify:
 - protected file access denial
 - suspicious IPv4 socket connect denial
 - policy reload and epoch invalidation
+- L1 cache hits after repeated access from the same process
 
 Sample output:
 

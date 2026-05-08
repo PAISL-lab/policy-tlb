@@ -51,6 +51,7 @@ test: $(TARGET)
 	./tests/test_file_access.sh
 	./tests/test_socket_connect.sh
 	./tests/test_policy_update.sh
+	./tests/test_l1_cache.sh
 
 unload:
 	sudo pkill -INT -x $(TARGET) || true
