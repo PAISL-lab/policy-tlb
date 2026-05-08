@@ -56,4 +56,5 @@ if [[ ${status} -eq 0 ]]; then
 fi
 
 grep -Eq "hook=file_(open|read)" "${tmpdir}/guard.log"
+grep -E "hook=file_(open|read)" "${tmpdir}/guard.log" | tail -n 5
 echo "file access deny test passed"

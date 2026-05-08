@@ -54,4 +54,5 @@ if [[ ${status} -eq 0 ]]; then
 fi
 
 grep -q "hook=exec" "${tmpdir}/guard.log"
+grep "hook=exec" "${tmpdir}/guard.log" | tail -n 5
 echo "execve deny test passed"

@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include "../include/common.h"
 
@@ -190,6 +191,16 @@ static int parse_ipv4_cidr(const char *value, __u32 *addr, __u32 *mask)
 	return 0;
 }
 
+static __u64 path_resource_id(const char *value)
+{
+	struct stat st;
+
+	if (!value || stat(value, &st) != 0)
+		return 0;
+
+	return (__u64)st.st_ino;
+}
+
 static int add_rule(struct policy_load_state *state, struct mcp_policy_rule *rule)
 {
 	__u32 index;
@@ -253,6 +264,8 @@ static int load_rule_file(const char *path, __u32 forced_type,
 		rule.value_len = strnlen(value, sizeof(rule.value));
 		snprintf(rule.value, sizeof(rule.value), "%s", value);
 		snprintf(rule.name, sizeof(rule.name), "%s", name[0] ? name : value);
+		if (rule.rule_type == MCP_GUARD_RULE_PATH_PREFIX)
+			rule.resource_id = path_resource_id(value);
 
 		if (rule.rule_type == MCP_GUARD_RULE_IPV4_CONNECT) {
 			if (parse_ipv4_cidr(value, &rule.ipv4_addr, &rule.ipv4_mask) != 0) {

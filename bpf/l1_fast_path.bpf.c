@@ -76,9 +76,7 @@ static __always_inline __u64 mcp_fnv1a_hash(const char *value, __u32 max_len)
 static __always_inline __u64 mcp_file_resource_id(struct file *file)
 {
 	struct inode *inode;
-	struct super_block *sb;
 	__u64 ino = 0;
-	__u64 dev = 0;
 
 	if (!file)
 		return 0;
@@ -88,11 +86,7 @@ static __always_inline __u64 mcp_file_resource_id(struct file *file)
 		return 0;
 
 	ino = BPF_CORE_READ(inode, i_ino);
-	sb = BPF_CORE_READ(inode, i_sb);
-	if (sb)
-		dev = (__u64)BPF_CORE_READ(sb, s_dev);
-
-	return (dev << 32) ^ ino;
+	return ino;
 }
 
 #endif

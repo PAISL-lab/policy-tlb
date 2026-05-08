@@ -52,6 +52,34 @@ static const char *action_name(__u32 action)
 	}
 }
 
+static const char *layer_name(__u32 layer)
+{
+	switch (layer) {
+	case MCP_GUARD_LAYER_L1:
+		return "L1";
+	case MCP_GUARD_LAYER_L2:
+		return "L2";
+	case MCP_GUARD_LAYER_L3:
+		return "L3";
+	default:
+		return "unknown";
+	}
+}
+
+static double model_us_for_layer(__u32 layer)
+{
+	switch (layer) {
+	case MCP_GUARD_LAYER_L1:
+		return 0.018;
+	case MCP_GUARD_LAYER_L2:
+		return 0.023;
+	case MCP_GUARD_LAYER_L3:
+		return 0.989;
+	default:
+		return 0.0;
+	}
+}
+
 static void handle_signal(int signo)
 {
 	if (signo == SIGHUP)
@@ -85,9 +113,15 @@ static int print_event(void *ctx, const struct mcp_event *event)
 		inet_ntop(AF_INET, &in, addr, sizeof(addr));
 	}
 
-	printf("[%s] pid=%u uid=%u hook=%s rule=%u error=%u path=%s",
+	double duration_us = (double)event->duration_ns / 1000.0;
+	double model_us = model_us_for_layer(event->layer);
+
+	printf("[%s] pid=%u uid=%u hook=%s layer=%s duration_ns=%llu "
+	       "duration_us=%.3f model_us=%.3f delta_us=%.3f rule=%u error=%u path=%s",
 	       action_name(event->action), event->pid, event->uid,
-	       hook_name(event->hook_id), event->rule_id, event->error,
+	       hook_name(event->hook_id), layer_name(event->layer),
+	       (unsigned long long)event->duration_ns, duration_us,
+	       model_us, duration_us - model_us, event->rule_id, event->error,
 	       event->path[0] ? event->path : "-");
 	if (addr[0])
 		printf(" dst=%s:%u", addr, event->port);

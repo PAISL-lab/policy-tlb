@@ -60,4 +60,5 @@ PY
 
 sleep 1
 grep -q "hook=socket_connect" "${tmpdir}/guard.log"
+grep "hook=socket_connect" "${tmpdir}/guard.log" | tail -n 5
 echo "socket connect deny test passed"

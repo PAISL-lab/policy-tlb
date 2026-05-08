@@ -60,6 +60,7 @@ static __always_inline void mcp_copy_rule_name(char *dst,
 static __always_inline int mcp_l3_string_decide(__u32 rule_type,
 						__u32 hook_id,
 						const char *value,
+						__u64 resource_id,
 						__u32 *rule_id,
 						char *rule_name)
 {
@@ -74,7 +75,47 @@ static __always_inline int mcp_l3_string_decide(__u32 rule_type,
 			continue;
 		if (!(rule->hook_mask & hook_mask))
 			continue;
+		if (rule_type == MCP_GUARD_RULE_PATH_PREFIX &&
+		    rule->resource_id && rule->resource_id == resource_id) {
+			if (rule_id)
+				*rule_id = rule->rule_id;
+			if (rule_name)
+				mcp_copy_rule_name(rule_name, rule);
+			return rule->action;
+		}
 		if (!mcp_has_prefix(value, rule->value, rule->value_len))
+			continue;
+
+		if (rule_id)
+			*rule_id = rule->rule_id;
+		if (rule_name)
+			mcp_copy_rule_name(rule_name, rule);
+		return rule->action;
+	}
+
+	if (rule_id)
+		*rule_id = 0;
+	return mcp_policy_default_action();
+}
+
+static __always_inline int mcp_l3_resource_decide(__u32 rule_type,
+						  __u32 hook_id,
+						  __u64 resource_id,
+						  __u32 *rule_id,
+						  char *rule_name)
+{
+	__u32 hook_mask = mcp_guard_hook_mask(hook_id);
+
+	for (__u32 i = 0; i < MCP_GUARD_MAX_RULES; i++) {
+		struct mcp_policy_rule *rule = bpf_map_lookup_elem(&policy_rules, &i);
+
+		if (!rule || !rule->enabled)
+			continue;
+		if (rule->rule_type != rule_type)
+			continue;
+		if (!(rule->hook_mask & hook_mask))
+			continue;
+		if (!rule->resource_id || rule->resource_id != resource_id)
 			continue;
 
 		if (rule_id)
@@ -142,9 +183,11 @@ static __always_inline void mcp_copy_event_rule_name(char *dst, const char *src)
 
 static __always_inline void mcp_emit_event(__u32 hook_id,
 					   __u32 action,
+					   __u32 layer,
 					   __u32 reason,
 					   __u32 rule_id,
 					   __u64 resource_id,
+					   __u64 start_ns,
 					   const char *path,
 					   const char *rule_name,
 					   __u16 family,
@@ -155,12 +198,15 @@ static __always_inline void mcp_emit_event(__u32 hook_id,
 	struct mcp_event *event;
 	__u64 pid_tgid = bpf_get_current_pid_tgid();
 	__u64 uid_gid = bpf_get_current_uid_gid();
+	__u64 now_ns;
 
 	event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
 	if (!event)
 		return;
 
-	event->ts_ns = bpf_ktime_get_ns();
+	now_ns = bpf_ktime_get_ns();
+	event->ts_ns = now_ns;
+	event->duration_ns = now_ns - start_ns;
 	event->epoch = mcp_current_epoch();
 	event->resource_id = resource_id;
 	event->tgid = (__u32)(pid_tgid >> 32);
@@ -169,6 +215,7 @@ static __always_inline void mcp_emit_event(__u32 hook_id,
 	event->gid = (__u32)(uid_gid >> 32);
 	event->hook_id = hook_id;
 	event->action = action;
+	event->layer = layer;
 	event->reason = reason;
 	event->rule_id = rule_id;
 	event->error = error;

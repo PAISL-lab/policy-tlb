@@ -63,4 +63,5 @@ fi
 
 grep -q "epoch=2" "${tmpdir}/guard.log"
 grep -q "hook=exec" "${tmpdir}/guard.log"
+grep "hook=exec" "${tmpdir}/guard.log" | tail -n 5
 echo "policy reload epoch invalidation test passed"

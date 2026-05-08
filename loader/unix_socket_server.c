@@ -60,6 +60,20 @@ static const char *action_name(__u32 action)
 	}
 }
 
+static const char *layer_name(__u32 layer)
+{
+	switch (layer) {
+	case MCP_GUARD_LAYER_L1:
+		return "L1";
+	case MCP_GUARD_LAYER_L2:
+		return "L2";
+	case MCP_GUARD_LAYER_L3:
+		return "L3";
+	default:
+		return "unknown";
+	}
+}
+
 static void close_client(struct mcp_unix_socket_server *server, int index)
 {
 	close(server->clients[index]);
@@ -160,11 +174,14 @@ void mcp_unix_socket_server_publish(struct mcp_unix_socket_server *server,
 
 	mcp_unix_socket_server_accept(server);
 	len = snprintf(line, sizeof(line),
-		       "{\"ts_ns\":%llu,\"pid\":%u,\"uid\":%u,\"hook\":\"%s\","
-		       "\"action\":\"%s\",\"rule_id\":%u,\"error\":%u,"
+	       "{\"ts_ns\":%llu,\"pid\":%u,\"uid\":%u,\"hook\":\"%s\","
+		       "\"action\":\"%s\",\"layer\":\"%s\",\"duration_ns\":%llu,"
+		       "\"rule_id\":%u,\"error\":%u,"
 		       "\"path\":\"%s\",\"rule\":\"%s\",\"port\":%u}\n",
 		       (unsigned long long)event->ts_ns, event->pid, event->uid,
 		       hook_name(event->hook_id), action_name(event->action),
+		       layer_name(event->layer),
+		       (unsigned long long)event->duration_ns,
 		       event->rule_id, event->error, event->path,
 		       event->rule_name, event->port);
 	if (len <= 0)

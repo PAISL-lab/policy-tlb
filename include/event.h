@@ -9,6 +9,7 @@
 
 struct mcp_event {
 	__u64 ts_ns;
+	__u64 duration_ns;
 	__u64 epoch;
 	__u64 resource_id;
 	__u32 tgid;
@@ -17,6 +18,7 @@ struct mcp_event {
 	__u32 gid;
 	__u32 hook_id;
 	__u32 action;
+	__u32 layer;
 	__u32 reason;
 	__u32 rule_id;
 	__u32 error;

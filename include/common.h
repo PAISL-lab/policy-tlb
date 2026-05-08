@@ -50,6 +50,12 @@ enum mcp_guard_rule_type {
 	MCP_GUARD_RULE_IPV4_CONNECT = 3,
 };
 
+enum mcp_guard_layer {
+	MCP_GUARD_LAYER_L1 = 1,
+	MCP_GUARD_LAYER_L2 = 2,
+	MCP_GUARD_LAYER_L3 = 3,
+};
+
 enum mcp_guard_reason {
 	MCP_GUARD_REASON_POLICY = 1,
 	MCP_GUARD_REASON_DEFAULT = 2,

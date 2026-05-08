@@ -25,6 +25,7 @@ struct mcp_policy_rule {
 	__u32 port;
 	__u32 ipv4_addr;
 	__u32 ipv4_mask;
+	__u64 resource_id;
 	char value[MCP_GUARD_RULE_VALUE_LEN];
 	char name[MCP_GUARD_RULE_NAME_LEN];
 };
