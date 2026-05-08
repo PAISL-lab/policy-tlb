@@ -33,6 +33,30 @@ decisions by process, hook, and resource id.
 
 The paper maps the hardware TLB hit idea onto security policy checking.
 
+### What TLB-Hit Modeled Means
+
+`TLB-Hit modeled` does not mean this project directly manipulates the CPU TLB.
+It means the framework copies the performance principle of a Translation
+Lookaside Buffer into the security decision path.
+
+In a CPU, a TLB hit avoids a costly page-table walk. In MCP eBPF Guard, an L1
+policy-cache hit avoids a costly security-policy walk. The analogy is:
+
+| Hardware Memory System | MCP eBPF Guard |
+|---|---|
+| Virtual address translation request | Runtime security decision request |
+| TLB key | Process, hook, and resource cache key |
+| TLB entry | Cached allow/deny/audit decision |
+| TLB hit | L1 Fast Path cache hit |
+| TLB miss | Fall through to L2/L3 policy evaluation |
+| Page-table walk | Slow path rule matching and event emission |
+| TLB shootdown/invalidation | Global epoch increment |
+
+The important design choice is that the hot path is optimized for the common
+case. Once a file, command, or socket decision is known, later events do not need
+to repeat expensive path parsing or policy scans. They only need to check that
+the cached decision was made under the current policy epoch.
+
 Instead of fully validating every syscall, the framework separates checks into
 three tiers:
 
@@ -436,4 +460,3 @@ tasks, and acceptance criteria so separate developers can work in parallel.
 This is an experimental security PoC. It attaches BPF LSM programs and can deny
 real process, file, and socket operations. Test it in a development environment
 before using it on a primary workstation.
-
