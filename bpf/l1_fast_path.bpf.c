@@ -1,6 +1,8 @@
 #ifndef MCP_GUARD_L1_FAST_PATH_BPF_C
 #define MCP_GUARD_L1_FAST_PATH_BPF_C
 
+#include <bpf/bpf_core_read.h>
+
 #include "maps.bpf.h"
 
 static __always_inline __u64 mcp_current_epoch(void)
