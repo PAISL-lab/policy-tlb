@@ -1,0 +1,4 @@
+{"type":"event","ts_ns":123,"pid":15263,"uid":0,"hook":"exec","action":"deny","layer":"L3","duration_ns":3887,"rule_id":1,"error":13,"path":"/usr/bin/true","rule":"test-true","port":0}
+{"type":"event","ts_ns":124,"pid":15304,"uid":0,"hook":"file_open","action":"deny","layer":"L3","duration_ns":7452,"rule_id":1,"error":13,"path":"/etc/shadow","rule":"shadow-file","port":0}
+{"type":"event","ts_ns":125,"pid":15351,"uid":0,"hook":"socket_connect","action":"deny","layer":"L3","duration_ns":2238,"rule_id":1,"error":13,"path":"","rule":"test-port-4444","port":4444}
+{"type":"event","ts_ns":126,"pid":15399,"uid":1000,"hook":"file_read","action":"allow","layer":"L1","duration_ns":391,"rule_id":0,"error":0,"path":"/tmp/demo.txt","rule":"","port":0}

@@ -397,21 +397,44 @@ lsm=landlock,lockdown,yama,integrity,apparmor,bpf
 
 ## Build
 
+Configure the local tool paths and libbpf linker flags:
+
+```bash
+./configure
+```
+
+Then build:
+
 ```bash
 make
 ```
 
 The build:
 
-1. Uses `bpf/vmlinux.h` for CO-RE type information.
-2. Compiles `bpf/mcp_guard.bpf.c` for the BPF target.
-3. Generates `build/mcp_guard.skel.h` with `bpftool`.
-4. Links the `mcp-guard` user-space loader.
+1. Reads `config.mk` when it exists.
+2. Uses `bpf/vmlinux.h` for CO-RE type information.
+3. Compiles `bpf/mcp_guard.bpf.c` for the BPF target.
+4. Generates `build/mcp_guard.skel.h` with `bpftool`.
+5. Links the `mcp-guard` user-space loader.
+
+You can still run `make` directly without `./configure`; the Makefile keeps
+the previous defaults as a fallback. To regenerate the `configure` script after
+editing `configure.ac`, run:
+
+```bash
+autoconf
+```
 
 Clean build outputs:
 
 ```bash
 make clean
+```
+
+Remove local `./configure` outputs as well:
+
+```bash
+make distclean
 ```
 
 ## Run

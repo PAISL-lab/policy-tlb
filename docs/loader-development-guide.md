@@ -327,6 +327,7 @@ Acceptance:
 The loader developer is done when these pass:
 
 ```bash
+./configure
 make clean && make
 sudo make test
 ```

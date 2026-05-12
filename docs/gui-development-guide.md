@@ -11,7 +11,7 @@ Why PySide6:
 - The repository already has a Qt stylesheet at `gui/resources/style.qss`.
 - Unix socket JSON-line clients are straightforward in Python.
 - Qt Widgets provide strong table, filtering, splitter, tab, and dialog support.
-- PySide6 is fast enough for the current event volume and easier to iterate on than C++ Qt.
+- PySide6 is fast enough for the current event volume and keeps iteration fast.
 - The GUI can be developed without root privileges by replaying sample JSON lines.
 
 GTK is a valid Linux-native option, but it cannot reuse `style.qss` and is less convenient for this dashboard's table/chart-heavy workflow. Use PySide6 unless the project explicitly pivots to a GNOME/libadwaita app.
@@ -20,14 +20,14 @@ GTK is a valid Linux-native option, but it cannot reuse `style.qss` and is less 
 
 Build a PySide6 desktop GUI that can run independently of loader development as long as the socket event contract remains stable.
 
-The current `gui/src/*.cpp` and `gui/src/*.h` files are legacy C++ Qt skeletons. New GUI work should use Python modules under `gui/mcp_guard_gui/` and can keep the existing C++ files untouched until they are removed or archived in a later cleanup.
+The GUI tree is Python-only. Application code lives under `gui/mcp_guard_gui/`, while `gui/resources/` stores Qt assets and `gui/samples/` stores replayable demo events.
 
 Recommended structure:
 
 ```text
 gui/
-  pyproject.toml
   run_gui.py
+  requirements.txt
   mcp_guard_gui/
     __init__.py
     app.py
@@ -35,11 +35,6 @@ gui/
     models.py
     main_window.py
     alert_popup.py
-    views/
-      dashboard.py
-      events.py
-      metrics.py
-      policy.py
     resources.py
   resources/
     style.qss
@@ -47,6 +42,10 @@ gui/
   samples/
     events.ndjson
 ```
+
+Future UI growth can split `main_window.py` into `views/dashboard.py`,
+`views/events.py`, `views/metrics.py`, and `views/policy.py` once the window
+logic becomes too large.
 
 ## Runtime Contract
 
@@ -224,31 +223,31 @@ Keep color as a secondary signal; the table text must remain readable.
 
 ## Development Tasks
 
-1. Scaffold PySide6 packaging.
-   - Add `gui/pyproject.toml` or `gui/requirements.txt`.
-   - Add `gui/run_gui.py`.
-   - Add `gui/mcp_guard_gui/` package.
+1. Maintain PySide6 packaging.
+   - Keep `gui/requirements.txt` as the minimal dependency list.
+   - Keep `gui/run_gui.py` as the executable entrypoint.
+   - Keep application modules under `gui/mcp_guard_gui/`.
    - Keep `style.qss` and `icon.png` under `gui/resources/`.
 
-2. Implement `SocketClient`.
+2. Extend `SocketClient`.
    - Connect/reconnect to `/tmp/mcp-guard.sock`.
    - Parse newline-delimited JSON.
    - Emit `event_received`, `metrics_received`, `reload_result_received`, and `connection_state_changed` signals.
    - Make socket path configurable.
 
-3. Implement models.
+3. Extend models.
    - Add `EventStore`.
    - Add `EventTableModel` using `QAbstractTableModel`.
    - Add filtering by action, hook, layer, and text search.
    - Keep a bounded event history to avoid unbounded memory growth.
 
-4. Implement `MainWindow`.
+4. Extend `MainWindow`.
    - Build Dashboard, Events, Metrics, and Policy tabs.
    - Wire socket signals into the store and views.
    - Add details panel for selected rows.
    - Add counters for deny/audit/allow and L1/L2/L3.
 
-5. Implement `AlertPopup`.
+5. Extend `AlertPopup`.
    - Trigger on deny events.
    - Auto-dismiss without focus stealing.
    - Add a settings toggle to disable popups.

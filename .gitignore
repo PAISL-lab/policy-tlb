@@ -6,6 +6,12 @@
 *.so
 *.d
 
+# Autoconf generated local files
+/autom4te.cache/
+/config.log
+/config.mk
+/config.status
+
 # Generated libbpf artifacts
 *.skel.h
 
@@ -23,6 +29,13 @@ core.*
 *~
 .vscode/
 .idea/
+
+# Python GUI artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
 
 # CMake build trees
 /cmake-build-*/

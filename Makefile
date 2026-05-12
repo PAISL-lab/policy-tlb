@@ -1,15 +1,18 @@
 CLANG ?= clang
 CC ?= cc
 BPFTOOL ?= bpftool
+LIBBPF_CFLAGS ?= $(shell pkg-config --cflags libbpf 2>/dev/null)
+USER_LDLIBS ?= $(shell pkg-config --libs libbpf 2>/dev/null || echo -lbpf) -lelf -lz
 
-BUILD_DIR := build
+BUILD_DIR ?= build
 BPF_OBJ := $(BUILD_DIR)/mcp_guard.bpf.o
 BPF_SKEL := $(BUILD_DIR)/mcp_guard.skel.h
-TARGET := mcp-guard
+TARGET ?= mcp-guard
+
+-include config.mk
 
 BPF_CFLAGS := -g -O2 -target bpf -D__TARGET_ARCH_x86 -I. -Iinclude -Ibpf
-USER_CFLAGS := -g -O2 -Wall -Wextra -I. -Iinclude -I$(BUILD_DIR)
-USER_LDLIBS := $(shell pkg-config --libs libbpf 2>/dev/null || echo -lbpf) -lelf -lz
+USER_CFLAGS := -g -O2 -Wall -Wextra -I. -Iinclude -I$(BUILD_DIR) $(LIBBPF_CFLAGS)
 
 LOADER_SRCS := \
 	loader/main.c \
@@ -19,7 +22,7 @@ LOADER_SRCS := \
 	loader/unix_socket_server.c
 LOADER_OBJS := $(patsubst loader/%.c,$(BUILD_DIR)/%.o,$(LOADER_SRCS))
 
-.PHONY: all clean run unload test vmlinux
+.PHONY: all clean distclean run unload test vmlinux
 
 all: $(TARGET)
 
@@ -58,3 +61,7 @@ unload:
 
 clean:
 	rm -rf $(BUILD_DIR) $(TARGET)
+
+distclean: clean
+	rm -f config.log config.mk config.status
+	rm -rf autom4te.cache

@@ -1,0 +1,40 @@
+QMainWindow {
+    background: #f6f7f9;
+}
+
+QTabWidget::pane {
+    border: 1px solid #d8dde6;
+    background: #ffffff;
+}
+
+QTableView {
+    background: #ffffff;
+    alternate-background-color: #f3f6fa;
+    gridline-color: #e1e6ef;
+    selection-background-color: #d9e8ff;
+    selection-color: #111827;
+}
+
+QHeaderView::section {
+    background: #eef2f7;
+    border: 0;
+    border-right: 1px solid #d8dde6;
+    padding: 6px;
+    font-weight: 600;
+}
+
+QLabel {
+    color: #1f2937;
+}
+
+QPlainTextEdit {
+    background: #101828;
+    color: #e5e7eb;
+    border: 1px solid #253044;
+    font-family: monospace;
+}
+
+QStatusBar {
+    background: #eef2f7;
+    color: #374151;
+}
