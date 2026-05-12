@@ -107,6 +107,18 @@ static void print_policy_flags(__u32 flags)
 	       !!(flags & MCP_GUARD_POLICY_F_SKIP_L2_SAFE));
 }
 
+static const char *scope_mode_name(__u32 mode)
+{
+	switch (mode) {
+	case MCP_GUARD_SCOPE_SYSTEM_WIDE:
+		return "system-wide";
+	case MCP_GUARD_SCOPE_SCOPED:
+		return "scoped";
+	default:
+		return "unknown";
+	}
+}
+
 static void decode_metric_index(__u32 index, __u32 *hook, __u32 *layer,
 				__u32 *action)
 {
@@ -352,9 +364,10 @@ static int print_event(void *ctx, const struct mcp_event *event)
 	double duration_us = (double)event->duration_ns / 1000.0;
 	double model_us = model_us_for_layer(event->layer);
 
-	printf("[%s] pid=%u uid=%u hook=%s layer=%s duration_ns=%llu "
+	printf("[%s] pid=%u uid=%u profile=%u agent=%u hook=%s layer=%s duration_ns=%llu "
 	       "duration_us=%.3f model_us=%.3f delta_us=%.3f rule=%u error=%u path=%s",
 	       action_name(event->action), event->pid, event->uid,
+	       event->profile_id, event->agent_id,
 	       hook_name(event->hook_id), layer_name(event->layer),
 	       (unsigned long long)event->duration_ns, duration_us,
 	       model_us, duration_us - model_us, event->rule_id, event->error,
@@ -381,6 +394,9 @@ static int load_policy_or_report(const char *policy_dir,
 	err = mcp_policy_load_dir(policy_dir,
 				  mcp_bpf_map_fd(guard, MCP_BPF_MAP_POLICY_RULES),
 				  mcp_bpf_map_fd(guard, MCP_BPF_MAP_PATH_POLICY_TRIE),
+				  mcp_bpf_map_fd(guard, MCP_BPF_MAP_SCOPE_COMM),
+				  mcp_bpf_map_fd(guard, MCP_BPF_MAP_SCOPE_PID),
+				  mcp_bpf_map_fd(guard, MCP_BPF_MAP_SCOPE_TGID),
 				  mcp_bpf_map_fd(guard, MCP_BPF_MAP_POLICY_CONFIG),
 				  mcp_bpf_map_fd(guard, MCP_BPF_MAP_GLOBAL_EPOCH),
 				  result);
@@ -399,6 +415,10 @@ static int load_policy_or_report(const char *policy_dir,
 	printf("loaded %u policy rules, generation=%u epoch=%llu\n",
 	       result->rule_count, result->active_generation,
 	       (unsigned long long)result->epoch);
+	printf("profile id=%u agent=%u mode=%s scopes=%u name=%s\n",
+	       result->profile_id, result->agent_id,
+	       scope_mode_name(result->scope_mode), result->scope_count,
+	       result->profile_name[0] ? result->profile_name : "-");
 	print_policy_flags(result->flags);
 	if (server)
 		mcp_unix_socket_server_publish_reload(server, 1,

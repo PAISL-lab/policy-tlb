@@ -67,6 +67,8 @@ The loader sends one newline-delimited JSON object per event. Current event exam
   "layer": "L3",
   "duration_ns": 3887,
   "rule_id": 1,
+  "profile_id": 42,
+  "agent_id": 7,
   "error": 13,
   "path": "/usr/bin/true",
   "rule": "test-true",
@@ -84,12 +86,14 @@ Current required fields for v1 display:
 - `layer`
 - `duration_ns`
 - `rule_id`
+- `profile_id`
+- `agent_id`
 - `error`
 - `path`
 - `rule`
 - `port`
 
-Fields expected soon from the loader:
+Additional message and timing fields sent by the loader:
 
 - `type`: `event`, `metrics_snapshot`, `reload_result`, or `health`
 - `tgid`
@@ -162,6 +166,8 @@ Recommended normalized fields:
 - `model_us`
 - `delta_us`
 - `rule_id`
+- `profile_id`
+- `agent_id`
 - `error`
 - `path`
 - `rule`

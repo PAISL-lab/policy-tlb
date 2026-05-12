@@ -21,6 +21,8 @@ struct mcp_event {
 	__u32 layer;
 	__u32 reason;
 	__u32 rule_id;
+	__u32 profile_id;
+	__u32 agent_id;
 	__u32 error;
 	__u32 data_len;
 	__u16 family;

@@ -17,16 +17,41 @@ struct policy_load_state {
 	__u32 next_index;
 };
 
+struct scope_load_state {
+	struct mcp_comm_scope_key comm_keys[MCP_GUARD_MAX_SCOPES];
+	__u32 pid_keys[MCP_GUARD_MAX_SCOPES];
+	__u32 tgid_keys[MCP_GUARD_MAX_SCOPES];
+	__u32 comm_count;
+	__u32 pid_count;
+	__u32 tgid_count;
+};
+
 struct path_policy_entry {
 	struct mcp_path_lpm_key key;
 	struct mcp_path_policy_value value;
+};
+
+struct comm_scope_entry {
+	struct mcp_comm_scope_key key;
+	struct mcp_scope_value value;
+};
+
+struct id_scope_entry {
+	__u32 key;
+	struct mcp_scope_value value;
 };
 
 struct policy_map_snapshot {
 	struct mcp_policy_rule rules[MCP_GUARD_MAX_RULES];
 	struct mcp_policy_config config;
 	struct path_policy_entry path_entries[MCP_GUARD_MAX_RULES];
+	struct comm_scope_entry comm_entries[MCP_GUARD_MAX_SCOPES];
+	struct id_scope_entry pid_entries[MCP_GUARD_MAX_SCOPES];
+	struct id_scope_entry tgid_entries[MCP_GUARD_MAX_SCOPES];
 	__u32 path_entry_count;
+	__u32 comm_entry_count;
+	__u32 pid_entry_count;
+	__u32 tgid_entry_count;
 	int have_config;
 };
 
@@ -144,6 +169,89 @@ static int json_get_u32(char *obj, const char *key, __u32 *out)
 
 	*out = (__u32)value;
 	return 0;
+}
+
+static int json_get_u32_array(char *obj, const char *key,
+			      __u32 *out, __u32 max_count, __u32 *count)
+{
+	char *p = json_field(obj, key);
+	__u32 n = 0;
+
+	if (count)
+		*count = 0;
+	if (!p)
+		return 0;
+	if (*p != '[')
+		return -EINVAL;
+	p++;
+
+	while (*p) {
+		char *end;
+		unsigned long value;
+
+		while (*p && (isspace((unsigned char)*p) || *p == ','))
+			p++;
+		if (*p == ']') {
+			if (count)
+				*count = n;
+			return 0;
+		}
+		if (n >= max_count)
+			return -ENOSPC;
+
+		errno = 0;
+		value = strtoul(p, &end, 0);
+		if (errno || end == p || value > UINT_MAX)
+			return -EINVAL;
+		out[n++] = (__u32)value;
+		p = end;
+	}
+
+	return -EINVAL;
+}
+
+static int json_get_string_array(char *obj, const char *key,
+				 struct mcp_comm_scope_key *out,
+				 __u32 max_count, __u32 *count)
+{
+	char *p = json_field(obj, key);
+	__u32 n = 0;
+
+	if (count)
+		*count = 0;
+	if (!p)
+		return 0;
+	if (*p != '[')
+		return -EINVAL;
+	p++;
+
+	while (*p) {
+		size_t i = 0;
+
+		while (*p && (isspace((unsigned char)*p) || *p == ','))
+			p++;
+		if (*p == ']') {
+			if (count)
+				*count = n;
+			return 0;
+		}
+		if (*p != '"' || n >= max_count)
+			return -EINVAL;
+		p++;
+
+		memset(&out[n], 0, sizeof(out[n]));
+		while (*p && *p != '"' && i + 1 < sizeof(out[n].comm)) {
+			if (*p == '\\' && p[1])
+				p++;
+			out[n].comm[i++] = *p++;
+		}
+		if (*p != '"')
+			return -EINVAL;
+		p++;
+		n++;
+	}
+
+	return -EINVAL;
 }
 
 static int json_get_bool(char *obj, const char *key, __u32 *out)
@@ -459,6 +567,136 @@ static int load_config_file(const char *path, struct mcp_policy_config *config)
 	return 0;
 }
 
+static int add_comm_scope(struct scope_load_state *scope, const char *comm)
+{
+	if (!scope || !comm || !comm[0])
+		return -EINVAL;
+	if (scope->comm_count >= MCP_GUARD_MAX_SCOPES)
+		return -ENOSPC;
+
+	memset(&scope->comm_keys[scope->comm_count], 0,
+	       sizeof(scope->comm_keys[scope->comm_count]));
+	snprintf(scope->comm_keys[scope->comm_count].comm,
+		 sizeof(scope->comm_keys[scope->comm_count].comm), "%s", comm);
+	scope->comm_count++;
+	return 0;
+}
+
+static int add_id_scope(__u32 *keys, __u32 *count, __u32 id)
+{
+	if (!keys || !count || !id)
+		return -EINVAL;
+	if (*count >= MCP_GUARD_MAX_SCOPES)
+		return -ENOSPC;
+
+	keys[(*count)++] = id;
+	return 0;
+}
+
+static int load_profile_file(const char *path, struct mcp_policy_config *config,
+			     struct scope_load_state *scope)
+{
+	char *buf;
+	char mode[32] = {};
+	char profile[MCP_GUARD_PROFILE_NAME_LEN] = {};
+	char comm[MCP_GUARD_COMM_LEN] = {};
+	__u32 value = 0;
+	__u32 added = 0;
+	int err;
+
+	err = read_text_file(path, &buf);
+	if (err == -ENOENT)
+		return 0;
+	if (err)
+		return err;
+
+	if (json_get_string(buf, "profile", profile, sizeof(profile)) == 0)
+		snprintf(config->profile_name, sizeof(config->profile_name), "%s",
+			 profile);
+	if (json_get_u32(buf, "profile_id", &value) == 0)
+		config->profile_id = value;
+	if (json_get_u32(buf, "agent_id", &value) == 0)
+		config->agent_id = value;
+
+	if (json_get_string(buf, "mode", mode, sizeof(mode)) == 0) {
+		if (strcmp(mode, "system-wide") == 0 ||
+		    strcmp(mode, "system_wide") == 0) {
+			config->scope_mode = MCP_GUARD_SCOPE_SYSTEM_WIDE;
+		} else if (strcmp(mode, "scoped") == 0 ||
+			   strcmp(mode, "scope") == 0) {
+			config->scope_mode = MCP_GUARD_SCOPE_SCOPED;
+		} else {
+			free(buf);
+			return -EINVAL;
+		}
+	}
+
+	if (json_get_string(buf, "comm", comm, sizeof(comm)) == 0) {
+		err = add_comm_scope(scope, comm);
+		if (err) {
+			free(buf);
+			return err;
+		}
+		added++;
+	}
+	err = json_get_string_array(buf, "comms",
+				    &scope->comm_keys[scope->comm_count],
+				    MCP_GUARD_MAX_SCOPES - scope->comm_count,
+				    &added);
+	if (err) {
+		free(buf);
+		return err;
+	}
+	scope->comm_count += added;
+
+	if (json_get_u32(buf, "pid", &value) == 0) {
+		err = add_id_scope(scope->pid_keys, &scope->pid_count, value);
+		if (err) {
+			free(buf);
+			return err;
+		}
+	}
+	added = 0;
+	err = json_get_u32_array(buf, "pids",
+				 &scope->pid_keys[scope->pid_count],
+				 MCP_GUARD_MAX_SCOPES - scope->pid_count,
+				 &added);
+	if (err) {
+		free(buf);
+		return err;
+	}
+	scope->pid_count += added;
+
+	if (json_get_u32(buf, "tgid", &value) == 0) {
+		err = add_id_scope(scope->tgid_keys, &scope->tgid_count, value);
+		if (err) {
+			free(buf);
+			return err;
+		}
+	}
+	added = 0;
+	err = json_get_u32_array(buf, "tgids",
+				 &scope->tgid_keys[scope->tgid_count],
+				 MCP_GUARD_MAX_SCOPES - scope->tgid_count,
+				 &added);
+	if (err) {
+		free(buf);
+		return err;
+	}
+	scope->tgid_count += added;
+
+	config->scope_count = scope->comm_count + scope->pid_count +
+			      scope->tgid_count;
+	if (config->scope_mode == MCP_GUARD_SCOPE_SCOPED &&
+	    !config->scope_count) {
+		free(buf);
+		return -EINVAL;
+	}
+
+	free(buf);
+	return 0;
+}
+
 static int write_rules(int rules_fd, const struct policy_load_state *state)
 {
 	for (__u32 i = 0; i < MCP_GUARD_MAX_RULES; i++) {
@@ -535,7 +773,63 @@ static int snapshot_path_trie(int path_trie_fd, struct policy_map_snapshot *snap
 	return 0;
 }
 
-static int snapshot_policy_maps(int rules_fd, int path_trie_fd, int config_fd,
+static int snapshot_comm_scopes(int fd, struct policy_map_snapshot *snapshot)
+{
+	struct mcp_comm_scope_key key = {};
+	struct mcp_comm_scope_key next_key = {};
+	int have_key = 0;
+
+	if (fd < 0 || !snapshot)
+		return 0;
+
+	snapshot->comm_entry_count = 0;
+	while (bpf_map_get_next_key(fd, have_key ? &key : NULL, &next_key) == 0) {
+		struct comm_scope_entry *entry;
+
+		if (snapshot->comm_entry_count >= MCP_GUARD_MAX_SCOPES)
+			return -ENOSPC;
+		entry = &snapshot->comm_entries[snapshot->comm_entry_count];
+		entry->key = next_key;
+		if (bpf_map_lookup_elem(fd, &entry->key, &entry->value) != 0)
+			return -errno;
+		snapshot->comm_entry_count++;
+		key = next_key;
+		have_key = 1;
+	}
+	return 0;
+}
+
+static int snapshot_id_scopes(int fd, struct id_scope_entry *entries,
+			      __u32 *entry_count)
+{
+	__u32 key = 0;
+	__u32 next_key = 0;
+	int have_key = 0;
+
+	if (entry_count)
+		*entry_count = 0;
+	if (fd < 0 || !entries || !entry_count)
+		return 0;
+
+	while (bpf_map_get_next_key(fd, have_key ? &key : NULL, &next_key) == 0) {
+		struct id_scope_entry *entry;
+
+		if (*entry_count >= MCP_GUARD_MAX_SCOPES)
+			return -ENOSPC;
+		entry = &entries[*entry_count];
+		entry->key = next_key;
+		if (bpf_map_lookup_elem(fd, &entry->key, &entry->value) != 0)
+			return -errno;
+		(*entry_count)++;
+		key = next_key;
+		have_key = 1;
+	}
+	return 0;
+}
+
+static int snapshot_policy_maps(int rules_fd, int path_trie_fd,
+				int scope_comm_fd, int scope_pid_fd,
+				int scope_tgid_fd, int config_fd,
 				struct policy_map_snapshot *snapshot)
 {
 	int err;
@@ -550,7 +844,18 @@ static int snapshot_policy_maps(int rules_fd, int path_trie_fd, int config_fd,
 	err = snapshot_config(config_fd, snapshot);
 	if (err)
 		return err;
-	return snapshot_path_trie(path_trie_fd, snapshot);
+	err = snapshot_path_trie(path_trie_fd, snapshot);
+	if (err)
+		return err;
+	err = snapshot_comm_scopes(scope_comm_fd, snapshot);
+	if (err)
+		return err;
+	err = snapshot_id_scopes(scope_pid_fd, snapshot->pid_entries,
+				 &snapshot->pid_entry_count);
+	if (err)
+		return err;
+	return snapshot_id_scopes(scope_tgid_fd, snapshot->tgid_entries,
+				  &snapshot->tgid_entry_count);
 }
 
 static int clear_path_trie(int path_trie_fd)
@@ -604,6 +909,78 @@ static int write_path_trie(int path_trie_fd, const struct policy_load_state *sta
 	return 0;
 }
 
+static int clear_comm_scopes(int fd)
+{
+	struct mcp_comm_scope_key key = {};
+
+	if (fd < 0)
+		return 0;
+
+	while (bpf_map_get_next_key(fd, NULL, &key) == 0)
+		bpf_map_delete_elem(fd, &key);
+	return 0;
+}
+
+static int clear_id_scopes(int fd)
+{
+	__u32 key = 0;
+
+	if (fd < 0)
+		return 0;
+
+	while (bpf_map_get_next_key(fd, NULL, &key) == 0)
+		bpf_map_delete_elem(fd, &key);
+	return 0;
+}
+
+static int write_scope_maps(int scope_comm_fd, int scope_pid_fd,
+			    int scope_tgid_fd,
+			    const struct scope_load_state *scope,
+			    const struct mcp_policy_config *config)
+{
+	struct mcp_scope_value value = {};
+	int err;
+
+	if (!scope || !config)
+		return -EINVAL;
+
+	value.profile_id = config->profile_id;
+	value.agent_id = config->agent_id;
+
+	err = clear_comm_scopes(scope_comm_fd);
+	if (err)
+		return err;
+	err = clear_id_scopes(scope_pid_fd);
+	if (err)
+		return err;
+	err = clear_id_scopes(scope_tgid_fd);
+	if (err)
+		return err;
+
+	value.selector_type = MCP_GUARD_SCOPE_SELECTOR_COMM;
+	for (__u32 i = 0; i < scope->comm_count; i++) {
+		if (bpf_map_update_elem(scope_comm_fd, &scope->comm_keys[i],
+					&value, BPF_ANY) != 0)
+			return -errno;
+	}
+
+	value.selector_type = MCP_GUARD_SCOPE_SELECTOR_PID;
+	for (__u32 i = 0; i < scope->pid_count; i++) {
+		if (bpf_map_update_elem(scope_pid_fd, &scope->pid_keys[i],
+					&value, BPF_ANY) != 0)
+			return -errno;
+	}
+
+	value.selector_type = MCP_GUARD_SCOPE_SELECTOR_TGID;
+	for (__u32 i = 0; i < scope->tgid_count; i++) {
+		if (bpf_map_update_elem(scope_tgid_fd, &scope->tgid_keys[i],
+					&value, BPF_ANY) != 0)
+			return -errno;
+	}
+
+	return 0;
+}
+
 static int restore_path_trie(int path_trie_fd,
 			     const struct policy_map_snapshot *snapshot)
 {
@@ -628,6 +1005,8 @@ static int restore_path_trie(int path_trie_fd,
 }
 
 static int restore_policy_maps(int rules_fd, int path_trie_fd, int config_fd,
+			       int scope_comm_fd, int scope_pid_fd,
+			       int scope_tgid_fd,
 			       const struct policy_map_snapshot *snapshot)
 {
 	__u32 key = MCP_GUARD_CONFIG_KEY;
@@ -646,6 +1025,39 @@ static int restore_policy_maps(int rules_fd, int path_trie_fd, int config_fd,
 	err = restore_path_trie(path_trie_fd, snapshot);
 	if (err && !first_err)
 		first_err = err;
+
+	err = clear_comm_scopes(scope_comm_fd);
+	if (err && !first_err)
+		first_err = err;
+	for (__u32 i = 0; i < snapshot->comm_entry_count; i++) {
+		if (bpf_map_update_elem(scope_comm_fd,
+					&snapshot->comm_entries[i].key,
+					&snapshot->comm_entries[i].value,
+					BPF_ANY) != 0 && !first_err)
+			first_err = -errno;
+	}
+
+	err = clear_id_scopes(scope_pid_fd);
+	if (err && !first_err)
+		first_err = err;
+	for (__u32 i = 0; i < snapshot->pid_entry_count; i++) {
+		if (bpf_map_update_elem(scope_pid_fd,
+					&snapshot->pid_entries[i].key,
+					&snapshot->pid_entries[i].value,
+					BPF_ANY) != 0 && !first_err)
+			first_err = -errno;
+	}
+
+	err = clear_id_scopes(scope_tgid_fd);
+	if (err && !first_err)
+		first_err = err;
+	for (__u32 i = 0; i < snapshot->tgid_entry_count; i++) {
+		if (bpf_map_update_elem(scope_tgid_fd,
+					&snapshot->tgid_entries[i].key,
+					&snapshot->tgid_entries[i].value,
+					BPF_ANY) != 0 && !first_err)
+			first_err = -errno;
+	}
 
 	if (snapshot->have_config &&
 	    bpf_map_update_elem(config_fd, &key, &snapshot->config, BPF_ANY) != 0 &&
@@ -681,6 +1093,14 @@ static int validate_policy_state(const struct policy_load_state *state,
 	if (state->next_index > MCP_GUARD_MAX_RULES)
 		return -EINVAL;
 	if (config->rule_count != state->next_index)
+		return -EINVAL;
+	if (!config->profile_id || !config->agent_id)
+		return -EINVAL;
+	if (config->scope_mode == MCP_GUARD_SCOPE_SCOPED &&
+	    !config->scope_count)
+		return -EINVAL;
+	if (config->scope_mode != MCP_GUARD_SCOPE_SYSTEM_WIDE &&
+	    config->scope_mode != MCP_GUARD_SCOPE_SCOPED)
 		return -EINVAL;
 
 	for (__u32 i = 0; i < state->next_index; i++) {
@@ -719,11 +1139,15 @@ static int join_policy_path(char *out, size_t out_len,
 int mcp_policy_load_dir(const char *policy_dir,
 			int rules_fd,
 			int path_trie_fd,
+			int scope_comm_fd,
+			int scope_pid_fd,
+			int scope_tgid_fd,
 			int config_fd,
 			int epoch_fd,
 			struct mcp_policy_load_result *result)
 {
 	struct policy_load_state state = {};
+	struct scope_load_state scope = {};
 	struct mcp_policy_config config = {
 		.default_action = MCP_GUARD_ACTION_ALLOW,
 		.enforce = 1,
@@ -731,6 +1155,11 @@ int mcp_policy_load_dir(const char *policy_dir,
 		.flags = MCP_GUARD_POLICY_F_SKIP_DIR_READ |
 			 MCP_GUARD_POLICY_F_CACHE_FILE_FOLLOWUPS |
 			 MCP_GUARD_POLICY_F_DENY_TAILCALL_FAIL,
+		.profile_id = 1,
+		.agent_id = 1,
+		.scope_mode = MCP_GUARD_SCOPE_SYSTEM_WIDE,
+		.scope_count = 0,
+		.profile_name = "default-mcp-agent",
 	};
 	char path[PATH_MAX];
 	__u32 key = MCP_GUARD_CONFIG_KEY;
@@ -745,6 +1174,14 @@ int mcp_policy_load_dir(const char *policy_dir,
 	if (err)
 		return err;
 	err = load_config_file(path, &config);
+	if (err)
+		return err;
+
+	err = join_policy_path(path, sizeof(path), policy_dir,
+			       "mcp_agent_profile.json");
+	if (err)
+		return err;
+	err = load_profile_file(path, &config, &scope);
 	if (err)
 		return err;
 
@@ -772,7 +1209,9 @@ int mcp_policy_load_dir(const char *policy_dir,
 	config.rule_count = state.next_index;
 	config.active_generation = 1;
 
-	err = snapshot_policy_maps(rules_fd, path_trie_fd, config_fd, &snapshot);
+	err = snapshot_policy_maps(rules_fd, path_trie_fd, scope_comm_fd,
+				   scope_pid_fd, scope_tgid_fd, config_fd,
+				   &snapshot);
 	if (err)
 		return err;
 	if (snapshot.have_config)
@@ -786,28 +1225,46 @@ int mcp_policy_load_dir(const char *policy_dir,
 
 	err = clear_path_trie(path_trie_fd);
 	if (err) {
-		restore_policy_maps(rules_fd, path_trie_fd, config_fd, &snapshot);
+		restore_policy_maps(rules_fd, path_trie_fd, config_fd,
+				    scope_comm_fd, scope_pid_fd, scope_tgid_fd,
+				    &snapshot);
 		return err;
 	}
 	err = write_path_trie(path_trie_fd, &state);
 	if (err) {
-		restore_policy_maps(rules_fd, path_trie_fd, config_fd, &snapshot);
+		restore_policy_maps(rules_fd, path_trie_fd, config_fd,
+				    scope_comm_fd, scope_pid_fd, scope_tgid_fd,
+				    &snapshot);
 		return err;
 	}
 	err = write_rules(rules_fd, &state);
 	if (err) {
-		restore_policy_maps(rules_fd, path_trie_fd, config_fd, &snapshot);
+		restore_policy_maps(rules_fd, path_trie_fd, config_fd,
+				    scope_comm_fd, scope_pid_fd, scope_tgid_fd,
+				    &snapshot);
+		return err;
+	}
+	err = write_scope_maps(scope_comm_fd, scope_pid_fd, scope_tgid_fd,
+			       &scope, &config);
+	if (err) {
+		restore_policy_maps(rules_fd, path_trie_fd, config_fd,
+				    scope_comm_fd, scope_pid_fd, scope_tgid_fd,
+				    &snapshot);
 		return err;
 	}
 	if (bpf_map_update_elem(config_fd, &key, &config, BPF_ANY) != 0) {
 		err = -errno;
-		restore_policy_maps(rules_fd, path_trie_fd, config_fd, &snapshot);
+		restore_policy_maps(rules_fd, path_trie_fd, config_fd,
+				    scope_comm_fd, scope_pid_fd, scope_tgid_fd,
+				    &snapshot);
 		return err;
 	}
 
 	err = bump_epoch(epoch_fd, &epoch);
 	if (err) {
-		restore_policy_maps(rules_fd, path_trie_fd, config_fd, &snapshot);
+		restore_policy_maps(rules_fd, path_trie_fd, config_fd,
+				    scope_comm_fd, scope_pid_fd, scope_tgid_fd,
+				    &snapshot);
 		return err;
 	}
 
@@ -815,6 +1272,12 @@ int mcp_policy_load_dir(const char *policy_dir,
 		result->rule_count = state.next_index;
 		result->flags = config.flags;
 		result->active_generation = config.active_generation;
+		result->profile_id = config.profile_id;
+		result->agent_id = config.agent_id;
+		result->scope_mode = config.scope_mode;
+		result->scope_count = config.scope_count;
+		snprintf(result->profile_name, sizeof(result->profile_name), "%s",
+			 config.profile_name);
 		result->epoch = epoch;
 	}
 

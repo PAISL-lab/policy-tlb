@@ -170,6 +170,8 @@ int BPF_PROG(mcp_guard_bprm_check_security, struct linux_binprm *bprm, int ret)
 
 	if (ret)
 		return ret;
+	if (!mcp_scope_matches())
+		return 0;
 	if (!scratch)
 		return mcp_tail_fail_ret();
 
@@ -277,6 +279,8 @@ int BPF_PROG(mcp_guard_file_open, struct file *file, int ret)
 
 	if (ret)
 		return ret;
+	if (!mcp_scope_matches())
+		return 0;
 
 	mcp_set_tail_start(start_ns);
 	mcp_fill_cache_key(&key, MCP_GUARD_HOOK_FILE_OPEN, resource_id);
@@ -372,6 +376,8 @@ int BPF_PROG(mcp_guard_file_permission, struct file *file, int mask, int ret)
 
 	if (ret)
 		return ret;
+	if (!mcp_scope_matches())
+		return 0;
 
 	mcp_set_tail_start(start_ns);
 	if (mask & (MCP_GUARD_MAY_WRITE | MCP_GUARD_MAY_APPEND))
@@ -479,6 +485,8 @@ int BPF_PROG(mcp_guard_socket_connect, struct socket *sock, struct sockaddr *add
 
 	if (ret)
 		return ret;
+	if (!mcp_scope_matches())
+		return 0;
 
 	mcp_set_tail_start(start_ns);
 	resource_id = mcp_socket_resource_id(address, &family, &ipv4_addr, &port);

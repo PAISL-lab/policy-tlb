@@ -59,6 +59,7 @@ test: $(TARGET)
 	./tests/test_l2_flags_cache.sh
 	./tests/test_metrics_snapshot.sh
 	./tests/test_atomic_reload.sh
+	./tests/test_agent_scope.sh
 
 unload:
 	sudo pkill -INT -x $(TARGET) || true

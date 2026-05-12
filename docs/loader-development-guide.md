@@ -4,7 +4,7 @@ This guide is for the developer owning the user-space loader. The loader is the 
 
 ## Goal
 
-Turn the current PoC loader into a stable daemon with predictable policy loading, event delivery, reload behavior, and observability.
+Maintain the loader as a stable daemon with predictable policy loading, event delivery, reload behavior, agent scoping, and observability.
 
 Current entrypoint:
 
@@ -48,6 +48,8 @@ The socket server currently sends newline-delimited JSON:
   "layer": "L3",
   "duration_ns": 3887,
   "rule_id": 1,
+  "profile_id": 1,
+  "agent_id": 1,
   "error": 13,
   "path": "/usr/bin/true",
   "rule": "test-true",
@@ -65,6 +67,7 @@ Policy directory inputs:
 - `dangerous_commands.json`
 - `dangerous_paths.json`
 - `dangerous_network.json`
+- `mcp_agent_profile.json`
 
 Current schema is intentionally small:
 
@@ -80,21 +83,25 @@ Current schema is intentionally small:
 {"rules":[{"name":"blocked-port","value":"0.0.0.0/0","port":4444,"action":"deny"}]}
 ```
 
+```json
+{"profile":"python-agent","profile_id":42,"agent_id":7,"mode":"scoped","comms":["python3"]}
+```
+
 ## Remaining Loader Roadmap
 
 The loader is already able to load BPF programs, populate tail-call maps, write
-basic policies, load path prefixes into an LPM trie, read events, reload on
-`SIGHUP`, print metrics on shutdown, and publish GUI-facing JSON. The remaining
-work is about hardening those paths into production-ready behavior, adding agent
-scoping, improving observability transport, and benchmark/report support.
+basic policies, load path prefixes into an LPM trie, load MCP agent scope maps,
+read events, reload on `SIGHUP`, print metrics on shutdown, and publish
+GUI-facing JSON. The remaining work is mainly GUI integration and
+benchmark/report support.
 
 | Framework Phase | Loader Responsibility | Main Files |
 |---|---|---|
-| 2. LPM_TRIE path policy | Complete for current PoC: path prefixes are normalized, loaded into LPM trie, and covered by runtime tests | `policy_loader.c`, `bpf_loader.c` |
-| 3. L2 flag/cache strengthening | Complete for current PoC: separated config/rule flags, startup summary, unknown flag rejection, and runtime L2 test | `policy_loader.c`, `main.c` |
-| 4. metrics/histogram map | Complete for current PoC: shutdown summary, periodic snapshots, layer ratios, and GUI metrics JSON | `bpf_loader.c`, `main.c`, `unix_socket_server.c` |
-| 5. atomic policy reload | Complete for current PoC: validation, map snapshot/rollback, generation bump, and reload_result JSON | `policy_loader.c`, `main.c` |
-| 6. MCP agent scoping | Parse agent profiles and bind policy scopes to pid/tgid/cgroup/comm | `policy_loader.c`, `main.c` |
+| 2. LPM_TRIE path policy | Complete: path prefixes are normalized, loaded into LPM trie, and covered by runtime tests | `policy_loader.c`, `bpf_loader.c` |
+| 3. L2 flag/cache strengthening | Complete: separated config/rule flags, startup summary, unknown flag rejection, and runtime L2 test | `policy_loader.c`, `main.c` |
+| 4. metrics/histogram map | Complete: shutdown summary, periodic snapshots, layer ratios, and GUI metrics JSON | `bpf_loader.c`, `main.c`, `unix_socket_server.c` |
+| 5. atomic policy reload | Complete: validation, map snapshot/rollback, generation bump, and reload_result JSON | `policy_loader.c`, `main.c` |
+| 6. MCP agent scoping | Complete for comm/pid/tgid selectors: profile parsing, scope maps, BPF prefiltering, event attribution, and runtime test | `policy_loader.c`, `main.c`, `l3_slow_path.bpf.c` |
 | 7. GUI | Stabilize socket schema and add health/reload/metrics messages | `unix_socket_server.c`, `main.c` |
 | 8. benchmark/report | Add benchmark mode and write CSV/JSON reports | `main.c`, new `report_writer.c` |
 
@@ -214,7 +221,7 @@ Implemented:
 Remaining:
 
 - A true inactive-generation map swap would require duplicated BPF maps or
-  generation-aware lookups in BPF. Current PoC uses snapshot/rollback around the
+  generation-aware lookups in BPF. The current implementation uses snapshot/rollback around the
   existing maps.
 
 Acceptance:
@@ -234,17 +241,30 @@ Acceptance:
 The framework needs to distinguish a normal local process from a specific MCP
 agent profile. The loader owns profile parsing and scope map population.
 
-Tasks:
+Implemented:
 
-- Parse `policies/mcp_agent_profile.json`.
-- Assign stable `agent_id` and `profile_id` values.
-- Bind profiles to one or more selectors:
-  - `pid`
-  - `tgid`
-  - `comm`
-  - future: `cgroup_id`
-- Load scope entries into BPF maps.
-- Add agent/profile fields to event JSON once the BPF event ABI exposes them.
+- `policies/mcp_agent_profile.json` parsing.
+- Stable `agent_id`, `profile_id`, and `profile` name storage in
+  `policy_config`.
+- `system-wide` mode for host-wide enforcement.
+- `scoped` mode for agent-only enforcement.
+- Scope selectors:
+  - `comm` / `comms`
+  - `pid` / `pids`
+  - `tgid` / `tgids`
+- Dedicated BPF scope maps for `comm`, `pid`, and `tgid`.
+- BPF prefiltering before L1/L2/L3 policy work.
+- Profile/agent consistency checks on scope map hits.
+- `profile_id` and `agent_id` in ring-buffer events and GUI JSON.
+- Snapshot/rollback of scope maps during atomic reload.
+- Runtime coverage through `tests/test_agent_scope.sh`.
+
+Remaining:
+
+- Add `cgroup_id` selectors when the daemon owns a stable cgroup placement
+  contract for MCP agents.
+- Support multiple simultaneously active profiles if the product requires more
+  than one scoped policy set at a time.
 
 Acceptance:
 

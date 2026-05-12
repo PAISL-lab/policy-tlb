@@ -9,7 +9,9 @@
 #define MCP_GUARD_RULE_VALUE_LEN 192
 #define MCP_GUARD_RULE_NAME_LEN 64
 #define MCP_GUARD_COMM_LEN 16
+#define MCP_GUARD_PROFILE_NAME_LEN 64
 #define MCP_GUARD_MAX_RULES 32
+#define MCP_GUARD_MAX_SCOPES 64
 #define MCP_GUARD_MAX_CLIENTS 16
 #define MCP_GUARD_SOCKET_PATH "/tmp/mcp-guard.sock"
 
@@ -73,6 +75,17 @@ enum mcp_guard_reason {
 	MCP_GUARD_REASON_DEFAULT = 2,
 	MCP_GUARD_REASON_L1_CACHE = 3,
 	MCP_GUARD_REASON_L2_SAFE = 4,
+};
+
+enum mcp_guard_scope_mode {
+	MCP_GUARD_SCOPE_SYSTEM_WIDE = 0,
+	MCP_GUARD_SCOPE_SCOPED = 1,
+};
+
+enum mcp_guard_scope_selector {
+	MCP_GUARD_SCOPE_SELECTOR_COMM = 1,
+	MCP_GUARD_SCOPE_SELECTOR_PID = 2,
+	MCP_GUARD_SCOPE_SELECTOR_TGID = 3,
 };
 
 static inline __u32 mcp_guard_hook_mask(__u32 hook_id)

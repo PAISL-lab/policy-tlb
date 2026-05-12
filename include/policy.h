@@ -14,6 +14,11 @@ struct mcp_policy_config {
 	__u32 rule_count;
 	__u32 flags;
 	__u32 active_generation;
+	__u32 profile_id;
+	__u32 agent_id;
+	__u32 scope_mode;
+	__u32 scope_count;
+	char profile_name[MCP_GUARD_PROFILE_NAME_LEN];
 };
 
 struct mcp_policy_rule {
@@ -46,6 +51,16 @@ struct mcp_path_policy_value {
 	__u32 value_len;
 	__u64 resource_id;
 	char name[MCP_GUARD_RULE_NAME_LEN];
+};
+
+struct mcp_comm_scope_key {
+	char comm[MCP_GUARD_COMM_LEN];
+};
+
+struct mcp_scope_value {
+	__u32 profile_id;
+	__u32 agent_id;
+	__u32 selector_type;
 };
 
 #endif

@@ -46,6 +46,27 @@ struct {
 } policy_rules SEC(".maps");
 
 struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, MCP_GUARD_MAX_SCOPES);
+	__type(key, struct mcp_comm_scope_key);
+	__type(value, struct mcp_scope_value);
+} scope_comm SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, MCP_GUARD_MAX_SCOPES);
+	__type(key, __u32);
+	__type(value, struct mcp_scope_value);
+} scope_pid SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, MCP_GUARD_MAX_SCOPES);
+	__type(key, __u32);
+	__type(value, struct mcp_scope_value);
+} scope_tgid SEC(".maps");
+
+struct {
 	__uint(type, BPF_MAP_TYPE_LPM_TRIE);
 	__uint(max_entries, MCP_GUARD_MAX_RULES);
 	__uint(map_flags, BPF_F_NO_PREALLOC);

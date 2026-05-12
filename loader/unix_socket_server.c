@@ -189,11 +189,13 @@ void mcp_unix_socket_server_publish(struct mcp_unix_socket_server *server,
 
 	len = snprintf(line, sizeof(line),
 	       "{\"type\":\"event\",\"ts_ns\":%llu,\"pid\":%u,\"uid\":%u,\"hook\":\"%s\","
+		       "\"profile_id\":%u,\"agent_id\":%u,"
 		       "\"action\":\"%s\",\"layer\":\"%s\",\"duration_ns\":%llu,"
 		       "\"rule_id\":%u,\"error\":%u,"
 		       "\"path\":\"%s\",\"rule\":\"%s\",\"port\":%u}\n",
 		       (unsigned long long)event->ts_ns, event->pid, event->uid,
-		       hook_name(event->hook_id), action_name(event->action),
+		       hook_name(event->hook_id), event->profile_id,
+		       event->agent_id, action_name(event->action),
 		       layer_name(event->layer),
 		       (unsigned long long)event->duration_ns,
 		       event->rule_id, event->error, event->path,

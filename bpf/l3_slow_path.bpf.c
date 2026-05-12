@@ -28,6 +28,53 @@ static __always_inline int mcp_policy_enforced(void)
 	return cfg->enforce != 0;
 }
 
+static __always_inline void mcp_current_profile(__u32 *profile_id,
+						__u32 *agent_id)
+{
+	struct mcp_policy_config *cfg = mcp_config();
+
+	if (!cfg) {
+		if (profile_id)
+			*profile_id = 0;
+		if (agent_id)
+			*agent_id = 0;
+		return;
+	}
+	if (profile_id)
+		*profile_id = cfg->profile_id;
+	if (agent_id)
+		*agent_id = cfg->agent_id;
+}
+
+static __always_inline int mcp_scope_matches(void)
+{
+	struct mcp_policy_config *cfg = mcp_config();
+	struct mcp_scope_value *scope;
+	struct mcp_comm_scope_key comm_key = {};
+	__u64 pid_tgid = bpf_get_current_pid_tgid();
+	__u32 pid = (__u32)pid_tgid;
+	__u32 tgid = (__u32)(pid_tgid >> 32);
+
+	if (!cfg || cfg->scope_mode == MCP_GUARD_SCOPE_SYSTEM_WIDE)
+		return 1;
+	if (cfg->scope_mode != MCP_GUARD_SCOPE_SCOPED)
+		return 0;
+
+	scope = bpf_map_lookup_elem(&scope_pid, &pid);
+	if (scope && scope->profile_id == cfg->profile_id &&
+	    scope->agent_id == cfg->agent_id)
+		return 1;
+	scope = bpf_map_lookup_elem(&scope_tgid, &tgid);
+	if (scope && scope->profile_id == cfg->profile_id &&
+	    scope->agent_id == cfg->agent_id)
+		return 1;
+
+	bpf_get_current_comm(&comm_key.comm, sizeof(comm_key.comm));
+	scope = bpf_map_lookup_elem(&scope_comm, &comm_key);
+	return scope && scope->profile_id == cfg->profile_id &&
+	       scope->agent_id == cfg->agent_id;
+}
+
 static __always_inline __u32 mcp_metric_index(__u32 hook_id,
 					      __u32 layer,
 					      __u32 action)
@@ -319,6 +366,7 @@ static __always_inline void mcp_emit_event(__u32 hook_id,
 	event->layer = layer;
 	event->reason = reason;
 	event->rule_id = rule_id;
+	mcp_current_profile(&event->profile_id, &event->agent_id);
 	event->error = error;
 	event->family = family;
 	event->port = port;

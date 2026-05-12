@@ -4,7 +4,7 @@ MCP eBPF Guard is a runtime security framework for local Model Context Protocol
 (MCP) agents. It uses BPF LSM hooks and a TLB-hit-modeled 3-tier decision
 pipeline to detect and block dangerous agent behavior with low overhead.
 
-This repository is an implementation-oriented PoC based on the paper idea:
+This repository implements the paper idea:
 
 > Ultra-Low Overhead MCP Agent Behavioral Control Framework using
 > TLB-Hit Modeled 3-Tier eBPF Pipeline
@@ -78,7 +78,7 @@ first-time or policy-changing events pay the slow-path cost.
 
 ## Current Implementation
 
-The current PoC implements:
+The current implementation includes:
 
 - BPF LSM hooks for:
   - `bprm_check_security`
@@ -91,6 +91,8 @@ The current PoC implements:
 - LPM trie backed path-prefix policy lookup for the file-open slow path.
 - Runtime metrics and histogram counters by hook, layer, and action.
 - Configurable L2/cache behavior flags loaded from policy config.
+- MCP agent scoping through a profile file and `comm`/`pid`/`tgid` selector
+  maps.
 - Per-CPU tail-call state and scratch buffers to keep the BPF stack within
   verifier limits.
 - Global epoch invalidation using a BPF array map.
@@ -98,8 +100,9 @@ The current PoC implements:
 - Ring buffer event delivery to user space.
 - User-space loader using libbpf skeletons.
 - Unix socket event publishing at `/tmp/mcp-guard.sock`.
-- Deny tests for exec, file access, socket connect, policy reload, and L1 cache
-  hits.
+- Deny tests for exec, file access, socket connect, policy reload, L1 cache
+  hits, path LPM trie policy, L2 flags/cache, metrics snapshots, atomic reload,
+  and MCP agent scoping.
 - Timing instrumentation with `layer`, `duration_ns`, `duration_us`,
   `model_us`, and `delta_us`.
 
@@ -140,6 +143,11 @@ tests/
   test_socket_connect.sh
   test_policy_update.sh
   test_l1_cache.sh
+  test_path_lpm_trie.sh
+  test_l2_flags_cache.sh
+  test_metrics_snapshot.sh
+  test_atomic_reload.sh
+  test_agent_scope.sh
 
 docs/
   loader-development-guide*.md
@@ -275,9 +283,41 @@ L3 performs deeper checks:
 - ring buffer event emission for deny/audit decisions
 - cache population for follow-up events
 
-For file policies, the PoC uses both path strings and an inode-based
+For file policies, the implementation uses both path strings and an inode-based
 `resource_id`. This makes repeated read/write enforcement less dependent on path
 string availability in every hook.
+
+## MCP Agent Scoping
+
+The loader reads `policies/mcp_agent_profile.json` and writes the active profile
+into `policy_config`. By default policies are system-wide. When `mode` is
+`scoped`, BPF checks the current process against dedicated scope maps before
+running the 3-tier policy pipeline.
+
+Supported profile fields:
+
+```json
+{
+  "profile": "python-agent",
+  "profile_id": 42,
+  "agent_id": 7,
+  "mode": "scoped",
+  "comms": ["python3"],
+  "pids": [1234],
+  "tgids": [1234]
+}
+```
+
+Scope selectors:
+
+- `comm` or `comms`: match Linux task command names such as `python3`.
+- `pid` or `pids`: match a specific thread id.
+- `tgid` or `tgids`: match a process/thread-group id.
+
+In scoped mode, non-matching local processes bypass MCP Guard enforcement and
+continue normally. Matching processes use the active policy and emitted events
+include `profile_id` and `agent_id` so the GUI can attribute decisions to the
+right MCP profile.
 
 ## Epoch Invalidation
 
@@ -291,11 +331,11 @@ Policy reload does not scan and delete every cache entry. Instead:
 This makes global invalidation O(1), which is the core lock-free epoch idea from
 the paper.
 
-Reload is atomic for the current PoC map layout: the loader parses and validates
+Reload is atomic for the current map layout: the loader parses and validates
 the new policy first, snapshots active maps, writes the new map state, and flips
 the visible generation plus epoch last. If a reload fails before the epoch bump,
-the loader restores the previous rules, config, and path trie entries and emits
-a `reload_result` JSON message.
+the loader restores the previous rules, config, path trie entries, and scope
+maps, then emits a `reload_result` JSON message.
 
 ## Metrics
 
@@ -504,6 +544,7 @@ sudo ./tests/test_path_lpm_trie.sh
 sudo ./tests/test_l2_flags_cache.sh
 sudo ./tests/test_metrics_snapshot.sh
 sudo ./tests/test_atomic_reload.sh
+sudo ./tests/test_agent_scope.sh
 ```
 
 The tests verify:
@@ -517,6 +558,7 @@ The tests verify:
 - L2 safe-resource hits and policy flag validation
 - periodic metrics snapshots and GUI-facing metrics JSON
 - failed reload rollback with unchanged active policy and epoch
+- scoped policy enforcement for selected MCP agent processes only
 
 Sample output:
 
@@ -526,7 +568,7 @@ Sample output:
 
 ## Timing Interpretation
 
-The PoC emits timing data for deny/audit events.
+The implementation emits timing data for deny/audit events.
 
 Fields:
 
@@ -544,7 +586,7 @@ Current baselines:
 | L2 | `0.023us` |
 | L3 | `0.989us` |
 
-The measured PoC value includes more than pure policy lookup. It includes helper
+The measured runtime value includes more than pure policy lookup. It includes helper
 calls, map lookups, event preparation, and ring buffer submission. L3 events are
 therefore expected to be higher than the idealized paper model. To evaluate the
 paper's main claim, measure repeated access after the first L3 miss and compare
@@ -552,11 +594,8 @@ L1 hit behavior against the L3 slow path.
 
 ## Current Limitations
 
-- The policy parser is intentionally minimal and should be hardened before
-  production use.
 - GUI files are still skeletons; development guides are available under `docs/`.
 - Event timing is emitted for deny/audit events, not every allow event.
-- File resource matching currently uses inode-oriented resource ids in the PoC.
 - Command and network L3 policy matching still scans a fixed-size array map;
   file-open path-prefix policy now uses an LPM trie.
 
@@ -577,6 +616,6 @@ tasks, and acceptance criteria so separate developers can work in parallel.
 
 ## Safety Note
 
-This is an experimental security PoC. It attaches BPF LSM programs and can deny
-real process, file, and socket operations. Test it in a development environment
-before using it on a primary workstation.
+This is an experimental security framework. It attaches BPF LSM programs and can
+deny real process, file, and socket operations. Test it in a development
+environment before using it on a primary workstation.
