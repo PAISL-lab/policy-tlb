@@ -91,7 +91,7 @@ scoping, improving observability transport, and benchmark/report support.
 | Framework Phase | Loader Responsibility | Main Files |
 |---|---|---|
 | 2. LPM_TRIE path policy | Complete for current PoC: path prefixes are normalized, loaded into LPM trie, and covered by runtime tests | `policy_loader.c`, `bpf_loader.c` |
-| 3. L2 flag/cache strengthening | Initial config/rule flags implemented; still needs schema validation and tests | `policy_loader.c`, `main.c` |
+| 3. L2 flag/cache strengthening | Complete for current PoC: separated config/rule flags, startup summary, unknown flag rejection, and runtime L2 test | `policy_loader.c`, `main.c` |
 | 4. metrics/histogram map | Initial BPF counters and shutdown summary implemented; still needs periodic/GUI snapshots | `bpf_loader.c`, `main.c`, `unix_socket_server.c` |
 | 5. atomic policy reload | Validation-before-write ordering implemented; full shadow generation remains | `policy_loader.c`, `main.c` |
 | 6. MCP agent scoping | Parse agent profiles and bind policy scopes to pid/tgid/cgroup/comm | `policy_loader.c`, `main.c` |
@@ -145,18 +145,21 @@ Implemented:
 - `skip_l2_safe`
 - Global flags in `policy_config.flags`.
 - Per-rule flags in `mcp_policy_rule.flags`.
+- `flags: [...]` arrays with unknown flag rejection.
+- Startup flag summary after policy load.
+- `tests/test_l2_flags_cache.sh` coverage for L2 file-open allow and bad flag rejection.
 
 Remaining:
 
-- Validate flags per rule type and reject unknown flag names.
-- Print loaded flag summaries at startup in verbose mode.
-- Add tests for follow-up cache behavior and L2 skip behavior.
+- Add deeper follow-up cache tests that inspect L1 read/write reuse after file-open decisions.
+- Decide whether rule-level `skip_l2_safe` should remain metadata only or drive a future per-resource L2 bypass map.
 
 Acceptance:
 
 - Existing policy files still load unchanged.
 - Unknown flags are rejected with a useful error.
 - Tests can assert that follow-up read/write cache behavior is enabled.
+- Tests can assert that safe file-open operations hit L2.
 
 ### 3. Metrics And Histogram Reader
 

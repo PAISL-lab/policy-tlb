@@ -17,6 +17,22 @@ struct policy_load_state {
 	__u32 next_index;
 };
 
+struct flag_spec {
+	const char *name;
+	__u32 value;
+};
+
+static const struct flag_spec config_flags[] = {
+	{ "skip_dir_read", MCP_GUARD_POLICY_F_SKIP_DIR_READ },
+	{ "cache_file_followups", MCP_GUARD_POLICY_F_CACHE_FILE_FOLLOWUPS },
+	{ "deny_tailcall_fail", MCP_GUARD_POLICY_F_DENY_TAILCALL_FAIL },
+	{ "skip_l2_safe", MCP_GUARD_POLICY_F_SKIP_L2_SAFE },
+};
+
+static const struct flag_spec rule_flags[] = {
+	{ "skip_l2_safe", MCP_GUARD_RULE_F_SKIP_L2_SAFE },
+};
+
 static int read_text_file(const char *path, char **out)
 {
 	FILE *file;
@@ -144,6 +160,61 @@ static void json_update_flag(char *obj, const char *key, __u32 flag, __u32 *flag
 		*flags |= flag;
 	else
 		*flags &= ~flag;
+}
+
+static int flag_value_by_name(const struct flag_spec *specs, size_t spec_count,
+			      const char *name, __u32 *value)
+{
+	for (size_t i = 0; i < spec_count; i++) {
+		if (strcmp(specs[i].name, name) == 0) {
+			*value = specs[i].value;
+			return 0;
+		}
+	}
+	return -ENOENT;
+}
+
+static int json_apply_flag_array(char *obj, const struct flag_spec *specs,
+				 size_t spec_count, __u32 *flags)
+{
+	char *p = json_field(obj, "flags");
+
+	if (!p)
+		return 0;
+	if (*p != '[')
+		return -EINVAL;
+	p++;
+
+	while (*p) {
+		char name[64] = {};
+		size_t i = 0;
+		__u32 flag = 0;
+
+		while (*p && (isspace((unsigned char)*p) || *p == ','))
+			p++;
+		if (*p == ']')
+			return 0;
+		if (*p != '"')
+			return -EINVAL;
+		p++;
+
+		while (*p && *p != '"' && i + 1 < sizeof(name)) {
+			if (*p == '\\' && p[1])
+				p++;
+			name[i++] = *p++;
+		}
+		if (*p != '"')
+			return -EINVAL;
+		p++;
+
+		if (flag_value_by_name(specs, spec_count, name, &flag) != 0) {
+			fprintf(stderr, "unknown policy flag: %s\n", name);
+			return -EINVAL;
+		}
+		*flags |= flag;
+	}
+
+	return -EINVAL;
 }
 
 static __u32 parse_action(const char *value)
@@ -288,6 +359,14 @@ static int load_rule_file(const char *path, __u32 forced_type,
 
 		json_get_string(cursor, "name", name, sizeof(name));
 		json_get_string(cursor, "action", action, sizeof(action));
+		err = json_apply_flag_array(cursor, rule_flags,
+					    sizeof(rule_flags) / sizeof(rule_flags[0]),
+					    &rule.flags);
+		if (err) {
+			*end = saved;
+			free(buf);
+			return err;
+		}
 		json_update_flag(cursor, "skip_l2_safe",
 				 MCP_GUARD_RULE_F_SKIP_L2_SAFE, &rule.flags);
 
@@ -347,12 +426,21 @@ static int load_config_file(const char *path, struct mcp_policy_config *config)
 		config->default_action = parse_action(action);
 	json_get_bool(buf, "enforce", &config->enforce);
 	json_get_bool(buf, "audit_allowed", &config->audit_allowed);
+	err = json_apply_flag_array(buf, config_flags,
+				    sizeof(config_flags) / sizeof(config_flags[0]),
+				    &config->flags);
+	if (err) {
+		free(buf);
+		return err;
+	}
 	json_update_flag(buf, "skip_dir_read", MCP_GUARD_POLICY_F_SKIP_DIR_READ,
 			 &config->flags);
 	json_update_flag(buf, "cache_file_followups",
 			 MCP_GUARD_POLICY_F_CACHE_FILE_FOLLOWUPS, &config->flags);
 	json_update_flag(buf, "deny_tailcall_fail",
 			 MCP_GUARD_POLICY_F_DENY_TAILCALL_FAIL, &config->flags);
+	json_update_flag(buf, "skip_l2_safe",
+			 MCP_GUARD_POLICY_F_SKIP_L2_SAFE, &config->flags);
 
 	free(buf);
 	return 0;
@@ -522,6 +610,7 @@ int mcp_policy_load_dir(const char *policy_dir,
 
 	if (result) {
 		result->rule_count = state.next_index;
+		result->flags = config.flags;
 		result->epoch = epoch;
 	}
 

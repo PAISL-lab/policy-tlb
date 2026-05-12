@@ -83,6 +83,16 @@ static double model_us_for_layer(__u32 layer)
 	}
 }
 
+static void print_policy_flags(__u32 flags)
+{
+	printf("policy flags: skip_dir_read=%u cache_file_followups=%u "
+	       "deny_tailcall_fail=%u skip_l2_safe=%u\n",
+	       !!(flags & MCP_GUARD_POLICY_F_SKIP_DIR_READ),
+	       !!(flags & MCP_GUARD_POLICY_F_CACHE_FILE_FOLLOWUPS),
+	       !!(flags & MCP_GUARD_POLICY_F_DENY_TAILCALL_FAIL),
+	       !!(flags & MCP_GUARD_POLICY_F_SKIP_L2_SAFE));
+}
+
 static void decode_metric_index(__u32 index, __u32 *hook, __u32 *layer,
 				__u32 *action)
 {
@@ -227,6 +237,7 @@ static int load_policy_or_report(const char *policy_dir,
 
 	printf("loaded %u policy rules, epoch=%llu\n", result->rule_count,
 	       (unsigned long long)result->epoch);
+	print_policy_flags(result->flags);
 	return 0;
 }
 

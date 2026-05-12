@@ -449,6 +449,7 @@ Expected startup:
 
 ```text
 loaded 7 policy rules, epoch=1
+policy flags: skip_dir_read=1 cache_file_followups=1 deny_tailcall_fail=1 skip_l2_safe=0
 event socket listening at /tmp/mcp-guard.sock
 mcp-guard running; send SIGHUP to reload policy, Ctrl-C to stop
 ```
@@ -488,6 +489,7 @@ sudo ./tests/test_socket_connect.sh
 sudo ./tests/test_policy_update.sh
 sudo ./tests/test_l1_cache.sh
 sudo ./tests/test_path_lpm_trie.sh
+sudo ./tests/test_l2_flags_cache.sh
 ```
 
 The tests verify:
@@ -498,6 +500,7 @@ The tests verify:
 - policy reload and epoch invalidation
 - L1 cache hits after repeated access from the same process
 - LPM trie path-prefix deny and longest-prefix allow behavior
+- L2 safe-resource hits and policy flag validation
 
 Sample output:
 

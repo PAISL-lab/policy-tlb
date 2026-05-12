@@ -34,7 +34,7 @@ static __always_inline int mcp_l2_file_decide(struct file *file,
 	mode = BPF_CORE_READ(inode, i_mode);
 	type = mode & MCP_GUARD_S_IFMT;
 
-	if (mcp_l2_policy_flags() & MCP_GUARD_RULE_F_SKIP_L2_SAFE)
+	if (mcp_l2_policy_flags() & MCP_GUARD_POLICY_F_SKIP_L2_SAFE)
 		return MCP_GUARD_ACTION_UNSET;
 
 	if (type != MCP_GUARD_S_IFREG && type != MCP_GUARD_S_IFDIR) {
