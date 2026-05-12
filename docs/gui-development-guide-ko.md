@@ -2,20 +2,53 @@
 
 이 문서는 desktop GUI 담당 개발자를 위한 가이드입니다. GUI는 `/tmp/mcp-guard.sock`에서 loader 이벤트를 받아 보안 알림을 표시하고 MCP Guard의 런타임 상태를 보여줘야 합니다.
 
+## 기술 선택
+
+GUI는 **Python 3 + PySide6(Qt for Python)** 로 개발합니다.
+
+PySide6를 선택하는 이유:
+
+- repository에 이미 Qt stylesheet인 `gui/resources/style.qss`가 있습니다.
+- Python에서 Unix socket JSON line client를 구현하기 쉽습니다.
+- Qt Widgets는 table, filter, splitter, tab, dialog 구현이 안정적입니다.
+- 현재 이벤트 양에는 PySide6 성능이 충분하고 C++ Qt보다 반복 개발이 빠릅니다.
+- sample JSON replay를 사용하면 root 권한 없이 GUI 개발이 가능합니다.
+
+GTK도 Linux-native GUI로는 좋은 선택이지만, `style.qss`를 재사용할 수 없고 현재 dashboard처럼 table/chart 중심 화면에는 Qt가 더 편합니다. 프로젝트가 GNOME/libadwaita 앱으로 명확히 전환되지 않는 한 PySide6를 사용합니다.
+
 ## 목표
 
-loader의 socket event 계약이 유지되는 한 GUI 개발자가 독립적으로 작업할 수 있는 Qt GUI를 구현합니다.
+loader의 socket event 계약이 유지되는 한 GUI 개발자가 독립적으로 작업할 수 있는 PySide6 desktop GUI를 구현합니다.
 
-현재 GUI 디렉토리는 skeleton 상태입니다.
+현재 `gui/src/*.cpp`, `gui/src/*.h` 파일은 기존 C++ Qt skeleton입니다. 새 GUI 작업은 `gui/mcp_guard_gui/` 아래 Python module로 진행하고, C++ 파일은 나중에 제거하거나 archive하기 전까지 그대로 둬도 됩니다.
 
-- `gui/src/main.cpp`
-- `gui/src/MainWindow.*`
-- `gui/src/SocketClient.*`
-- `gui/src/AlertPopup.*`
-- `gui/resources/style.qss`
-- `gui/resources/icon.png`
+권장 구조:
 
-## 외부 계약
+```text
+gui/
+  pyproject.toml
+  run_gui.py
+  mcp_guard_gui/
+    __init__.py
+    app.py
+    socket_client.py
+    models.py
+    main_window.py
+    alert_popup.py
+    views/
+      dashboard.py
+      events.py
+      metrics.py
+      policy.py
+    resources.py
+  resources/
+    style.qss
+    icon.png
+  samples/
+    events.ndjson
+```
+
+## 런타임 계약
 
 GUI는 Unix domain socket에 연결합니다.
 
@@ -23,7 +56,7 @@ GUI는 Unix domain socket에 연결합니다.
 /tmp/mcp-guard.sock
 ```
 
-loader는 한 줄에 JSON 객체 하나를 전송합니다. 예시는 다음과 같습니다.
+loader는 한 줄에 JSON 객체 하나를 전송합니다. 현재 event 예시는 다음과 같습니다.
 
 ```json
 {
@@ -42,7 +75,7 @@ loader는 한 줄에 JSON 객체 하나를 전송합니다. 예시는 다음과 
 }
 ```
 
-v1 화면 표시를 위한 필수 필드:
+v1 화면 표시를 위한 현재 필수 필드:
 
 - `ts_ns`
 - `pid`
@@ -57,7 +90,19 @@ v1 화면 표시를 위한 필수 필드:
 - `rule`
 - `port`
 
-GUI는 알 수 없는 필드를 무시해야 합니다.
+loader에서 곧 추가될 것으로 예상되는 필드:
+
+- `type`: `event`, `metrics_snapshot`, `reload_result`, `health`
+- `tgid`
+- `comm`
+- `epoch`
+- `resource_id`
+- `duration_us`
+- `model_us`
+- `delta_us`
+- hook/layer/action counter와 histogram bucket을 담은 metrics payload
+
+호환성 규칙: 알 수 없는 필드는 무시하고, optional field가 없으면 `-`로 표시합니다.
 
 ## UI 요구사항
 
@@ -65,14 +110,16 @@ GUI는 알 수 없는 필드를 무시해야 합니다.
 
 기본 layout:
 
-- 상단 status bar: 연결 상태, 이벤트 수, deny 수, 현재 filter.
-- 메인 이벤트 테이블: 시간, action, hook, layer, duration, pid, path/destination, rule.
-- 오른쪽 detail panel: 선택한 이벤트의 JSON 필드, 시간 비교, 대응 힌트.
-- 하단 status area: socket path와 마지막 error.
+- 상단 status bar: 연결 상태, socket path, event count, deny count, current epoch.
+- 왼쪽 navigation tab: Dashboard, Events, Metrics, Policy.
+- 메인 dashboard: L1/L2/L3 hit count, deny count, 최근 high-risk event, 평균 latency.
+- Events table: 시간, action, hook, layer, duration, pid, path/destination, rule.
+- Details panel: 선택된 event JSON, timing comparison, decision reason, process metadata.
+- 하단 status area: 마지막 socket error와 마지막 reload result.
 
-보안 운영 도구이므로 장식보다 가독성과 빠른 스캔성을 우선합니다.
+보안 운영 도구이므로 장식보다 가독성, 정보 밀도, 빠른 스캔성을 우선합니다.
 
-## 컴포넌트
+## PySide6 컴포넌트
 
 ### `SocketClient`
 
@@ -80,41 +127,68 @@ GUI는 알 수 없는 필드를 무시해야 합니다.
 
 - `/tmp/mcp-guard.sock`에 연결합니다.
 - newline-delimited JSON을 읽습니다.
-- loader가 실행 중이 아니면 backoff를 두고 재연결합니다.
-- parsing된 event object를 UI로 emit합니다.
-- 연결 상태를 제공합니다: disconnected, connecting, connected, error.
+- loader가 실행 중이 아니면 exponential backoff로 재연결합니다.
+- parsing된 Python dictionary를 UI로 emit합니다.
+- 연결 상태를 제공합니다: `disconnected`, `connecting`, `connected`, `error`.
 
 구현 메모:
 
-- `QLocalSocket`을 사용합니다.
+- PySide6의 `QLocalSocket`을 사용합니다.
 - newline이 올 때까지 partial read를 buffer에 쌓습니다.
-- `QJsonDocument`로 parsing합니다.
+- Python `json.loads`로 parsing합니다.
 - UI thread를 blocking하면 안 됩니다.
 - malformed JSON은 recoverable error로 처리하고 계속 읽습니다.
+
+### `EventStore`
+
+책임:
+
+- 최근 event를 bounded in-memory list로 유지합니다.
+- action, hook, layer별 counter를 유지합니다.
+- 현재 filter와 filtered row index를 유지합니다.
+- `QAbstractTableModel`에 데이터를 제공합니다.
+
+권장 normalized field:
+
+- `timestamp_ns`
+- `pid`
+- `tgid`
+- `uid`
+- `comm`
+- `hook`
+- `action`
+- `layer`
+- `duration_ns`
+- `duration_us`
+- `model_us`
+- `delta_us`
+- `rule_id`
+- `error`
+- `path`
+- `rule`
+- `port`
+- `resource_id`
+- `epoch`
 
 ### `MainWindow`
 
 책임:
 
-- dashboard layout을 소유합니다.
-- in-memory event model을 유지합니다.
-- action, hook, layer, text search filter를 제공합니다.
-- event counter와 최신 상태를 표시합니다.
+- main dashboard layout을 소유합니다.
+- `SocketClient` signal을 model/view에 연결합니다.
+- action/hook/layer/search filter를 제공합니다.
+- counter, connection state, selected event detail을 표시합니다.
+- 시작 시 `gui/resources/style.qss`를 로드합니다.
 
-권장 model field:
+### `MetricsView`
 
-- `timestampNs`
-- `pid`
-- `uid`
-- `hook`
-- `action`
-- `layer`
-- `durationNs`
-- `ruleId`
-- `error`
-- `path`
-- `rule`
-- `port`
+책임:
+
+- L1/L2/L3 count와 hit ratio를 표시합니다.
+- metrics snapshot이 들어오면 latency average와 histogram bucket을 표시합니다.
+- metrics snapshot이 아직 없으면 event-derived counter로 fallback합니다.
+
+초기 구현은 `QTableWidget`/`QTableView`와 간단한 bar로 충분합니다. chart가 중요해지면 나중에 `pyqtgraph`를 추가합니다.
 
 ### `AlertPopup`
 
@@ -132,7 +206,7 @@ GUI는 알 수 없는 필드를 무시해야 합니다.
 시간은 raw 값과 비교 가능한 값으로 함께 표시합니다.
 
 - `duration_ns`
-- `duration_us = duration_ns / 1000`
+- loader가 보내지 않으면 `duration_us = duration_ns / 1000`
 - model baseline:
   - L1: `0.018us`
   - L2: `0.023us`
@@ -150,46 +224,75 @@ GUI는 알 수 없는 필드를 무시해야 합니다.
 
 ## 개발 작업
 
-1. `gui/CMakeLists.txt`를 채웁니다.
-   - Qt Widgets를 사용합니다.
-   - `mcp-guard-gui` 실행 파일을 빌드합니다.
-   - `gui/resources/style.qss`와 `gui/resources/icon.png`를 포함합니다.
+1. PySide6 packaging을 구성합니다.
+   - `gui/pyproject.toml` 또는 `gui/requirements.txt`를 추가합니다.
+   - `gui/run_gui.py`를 추가합니다.
+   - `gui/mcp_guard_gui/` package를 추가합니다.
+   - `style.qss`와 `icon.png`는 `gui/resources/`에 유지합니다.
 
 2. `SocketClient`를 구현합니다.
-   - 연결, 재연결, read buffer, JSON parsing, event signal을 추가합니다.
-   - socket path를 설정 가능하게 하고 기본값은 `/tmp/mcp-guard.sock`으로 둡니다.
+   - `/tmp/mcp-guard.sock` 연결/재연결을 구현합니다.
+   - newline-delimited JSON을 parsing합니다.
+   - `event_received`, `metrics_received`, `reload_result_received`, `connection_state_changed` signal을 emit합니다.
+   - socket path를 설정 가능하게 만듭니다.
 
-3. `MainWindow`를 구현합니다.
-   - dashboard layout을 만듭니다.
-   - event table과 detail panel을 추가합니다.
-   - `SocketClient` signal을 event model에 연결합니다.
-   - filter와 counter를 추가합니다.
+3. model을 구현합니다.
+   - `EventStore`를 추가합니다.
+   - `QAbstractTableModel` 기반 `EventTableModel`을 추가합니다.
+   - action, hook, layer, text search filter를 추가합니다.
+   - memory가 무한히 늘지 않도록 bounded event history를 사용합니다.
 
-4. `AlertPopup`을 구현합니다.
-   - deny 이벤트에서 trigger합니다.
-   - 압축된 이벤트 정보를 보여줍니다.
+4. `MainWindow`를 구현합니다.
+   - Dashboard, Events, Metrics, Policy tab을 만듭니다.
+   - socket signal을 store/view에 연결합니다.
+   - 선택한 row의 detail panel을 추가합니다.
+   - deny/audit/allow 및 L1/L2/L3 counter를 표시합니다.
+
+5. `AlertPopup`을 구현합니다.
+   - deny event에서 trigger합니다.
    - focus를 빼앗지 않고 자동으로 닫힙니다.
+   - popup 비활성화 settings toggle을 추가합니다.
 
-5. offline/demo mode를 추가합니다.
-   - loader 없이도 UI 개발이 가능하도록 sample JSON event stream을 제공합니다.
-   - GUI 개발자는 root 권한이나 BPF 접근 없이 화면 작업을 계속할 수 있어야 합니다.
+6. offline/demo mode를 추가합니다.
+   - `gui/samples/events.ndjson`를 제공합니다.
+   - `--demo gui/samples/events.ndjson` option을 추가합니다.
+   - root, BPF, loader 없이도 GUI 개발이 가능해야 합니다.
+
+7. metrics message를 준비합니다.
+   - 초기에는 shutdown summary에서 유도 가능한 event counter를 표시합니다.
+   - loader가 주기적 `metrics_snapshot`을 추가하면 `MetricsView`로 route합니다.
+   - 알 수 없는 message type은 안전하게 무시합니다.
 
 ## 테스트 계획
 
-live loader로 수동 테스트:
+live loader 수동 테스트:
 
 ```bash
 sudo ./mcp-guard policies
-./gui/build/mcp-guard-gui
-curl https://example.com
+python3 gui/run_gui.py
+sudo cat /etc/shadow
 ```
 
 기대 GUI 동작:
 
 - 연결 상태가 connected로 바뀝니다.
-- deny 이벤트가 table에 나타납니다.
-- alert popup이 표시됩니다.
-- detail panel에 `layer`, `duration_ns`, `rule`이 보입니다.
+- deny event가 table에 나타납니다.
+- deny event에 대해 alert popup이 표시됩니다.
+- detail panel에 `layer`, `duration_ns`, `rule`, `path`가 보입니다.
+
+L2/metrics 관찰 수동 테스트:
+
+```bash
+sudo ./mcp-guard policies
+python3 gui/run_gui.py
+# 다른 터미널에서 network/file activity 실행
+```
+
+기대 동작:
+
+- deny/audit record가 들어오면 event가 live update됩니다.
+- L1/L2/L3 counter가 event-derived data로 갱신됩니다.
+- loader가 `metrics_snapshot`을 emit하기 시작하면 GUI 재시작 없이 Metrics tab이 갱신됩니다.
 
 loader 없이 수동 테스트:
 
@@ -198,9 +301,20 @@ loader 없이 수동 테스트:
 - 나중에 loader를 시작합니다.
 - GUI는 재시작 없이 reconnect합니다.
 
-malformed input 테스트:
+Demo mode 테스트:
 
-- test socket으로 잘못된 JSON line을 보냅니다.
+```bash
+python3 gui/run_gui.py --demo gui/samples/events.ndjson
+```
+
+기대 동작:
+
+- root 권한 없이 sample event가 표시됩니다.
+- filter, detail panel, counter, popup logic이 동작합니다.
+
+Malformed input 테스트:
+
+- demo mode 또는 test socket으로 잘못된 JSON line을 입력합니다.
 - GUI는 error 상태를 기록하되 계속 실행되어야 합니다.
 
 ## Loader 개발자와의 협업 규칙
@@ -213,4 +327,4 @@ GUI는 loader의 JSON field name에 의존합니다. 변경 사항은 `docs/load
 - optional field가 없으면 `-`로 표시합니다.
 - required field가 없어도 crash하면 안 되며 malformed event로 표시합니다.
 - loader의 새 필드는 먼저 detail panel에 추가하고, 필요할 때 table column으로 승격합니다.
-
+- loader가 `metrics_snapshot`, `reload_result`, `health` 같은 message type을 추가하면 GUI는 `type` 기준으로 route하고 event rendering과 분리해야 합니다.
