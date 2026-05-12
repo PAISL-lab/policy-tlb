@@ -90,7 +90,7 @@ scoping, improving observability transport, and benchmark/report support.
 
 | Framework Phase | Loader Responsibility | Main Files |
 |---|---|---|
-| 2. LPM_TRIE path policy | Implemented for file-open path prefixes; still needs runtime tests and metadata hardening | `policy_loader.c`, `bpf_loader.c` |
+| 2. LPM_TRIE path policy | Complete for current PoC: path prefixes are normalized, loaded into LPM trie, and covered by runtime tests | `policy_loader.c`, `bpf_loader.c` |
 | 3. L2 flag/cache strengthening | Initial config/rule flags implemented; still needs schema validation and tests | `policy_loader.c`, `main.c` |
 | 4. metrics/histogram map | Initial BPF counters and shutdown summary implemented; still needs periodic/GUI snapshots | `bpf_loader.c`, `main.c`, `unix_socket_server.c` |
 | 5. atomic policy reload | Validation-before-write ordering implemented; full shadow generation remains | `policy_loader.c`, `main.c` |
@@ -112,16 +112,16 @@ Implemented:
 - Trie map fd exposure through `mcp_bpf_map_fd`.
 - User-space trie key/value construction.
 - Path prefixes loaded from `dangerous_paths.json`.
-- Trie cleanup during successful reload.
-
-Remaining:
-
-- Normalize path policy values before loading:
+- Path policy normalization:
   - reject empty paths
   - require absolute paths
   - collapse trailing slashes except `/`
-  - reject values longer than `MCP_GUARD_PATH_LEN`
-- Add runtime tests that prove prefix deny behavior through the trie.
+  - reject values longer than `MCP_GUARD_RULE_VALUE_LEN`
+- Trie cleanup during successful reload.
+- Runtime coverage through `tests/test_path_lpm_trie.sh`.
+
+Remaining:
+
 - Decide final metadata layout if path rules move fully out of `policy_rules`.
 
 Acceptance:
@@ -130,6 +130,7 @@ Acceptance:
 - More than one path prefix can coexist without ordering bugs.
 - Policy reload removes deleted path prefixes.
 - Bad path policy reload does not clear the active policy.
+- Longest-prefix allow exceptions can override broader deny prefixes.
 
 ### 2. L2 Flag And Cache Configuration
 

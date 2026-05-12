@@ -487,6 +487,7 @@ sudo ./tests/test_file_access.sh
 sudo ./tests/test_socket_connect.sh
 sudo ./tests/test_policy_update.sh
 sudo ./tests/test_l1_cache.sh
+sudo ./tests/test_path_lpm_trie.sh
 ```
 
 The tests verify:
@@ -496,6 +497,7 @@ The tests verify:
 - suspicious IPv4 socket connect denial
 - policy reload and epoch invalidation
 - L1 cache hits after repeated access from the same process
+- LPM trie path-prefix deny and longest-prefix allow behavior
 
 Sample output:
 
@@ -536,8 +538,8 @@ L1 hit behavior against the L3 slow path.
 - GUI files are still skeletons; development guides are available under `docs/`.
 - Event timing is emitted for deny/audit events, not every allow event.
 - File resource matching currently uses inode-oriented resource ids in the PoC.
-- L3 policy matching scans a fixed-size array map, which is simple but not the
-  final optimized data structure.
+- Command and network L3 policy matching still scans a fixed-size array map;
+  file-open path-prefix policy now uses an LPM trie.
 
 ## Developer Guides
 

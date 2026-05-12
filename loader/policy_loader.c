@@ -213,6 +213,29 @@ static __u64 path_resource_id(const char *value)
 	return (__u64)st.st_ino;
 }
 
+static int normalize_path_value(char *value)
+{
+	size_t len;
+
+	if (!value)
+		return -EINVAL;
+
+	len = strnlen(value, MCP_GUARD_RULE_VALUE_LEN);
+	if (!len)
+		return -EINVAL;
+	if (len >= MCP_GUARD_RULE_VALUE_LEN - 1)
+		return -ENAMETOOLONG;
+	if (value[0] != '/')
+		return -EINVAL;
+
+	while (len > 1 && value[len - 1] == '/') {
+		value[len - 1] = 0;
+		len--;
+	}
+
+	return 0;
+}
+
 static int add_rule(struct policy_load_state *state, struct mcp_policy_rule *rule)
 {
 	__u32 index;
@@ -271,6 +294,14 @@ static int load_rule_file(const char *path, __u32 forced_type,
 		rule.rule_type = forced_type;
 		rule.action = parse_action(action);
 		rule.hook_mask = default_hook_mask(rule.rule_type);
+		if (rule.rule_type == MCP_GUARD_RULE_PATH_PREFIX) {
+			err = normalize_path_value(value);
+			if (err) {
+				*end = saved;
+				free(buf);
+				return err;
+			}
+		}
 		rule.value_len = strnlen(value, sizeof(rule.value));
 		snprintf(rule.value, sizeof(rule.value), "%s", value);
 		snprintf(rule.name, sizeof(rule.name), "%s", name[0] ? name : value);

@@ -141,8 +141,6 @@ static __always_inline int mcp_l3_path_trie_decide(__u32 hook_id,
 		goto default_action;
 	if (!(rule->hook_mask & hook_mask))
 		goto default_action;
-	if (rule->resource_id && rule->resource_id != resource_id)
-		goto default_action;
 
 	if (rule_id)
 		*rule_id = rule->rule_id;
