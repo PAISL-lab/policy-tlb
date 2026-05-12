@@ -46,9 +46,24 @@ struct {
 } policy_rules SEC(".maps");
 
 struct {
+	__uint(type, BPF_MAP_TYPE_LPM_TRIE);
+	__uint(max_entries, MCP_GUARD_MAX_RULES);
+	__uint(map_flags, BPF_F_NO_PREALLOC);
+	__type(key, struct mcp_path_lpm_key);
+	__type(value, struct mcp_path_policy_value);
+} path_policy_trie SEC(".maps");
+
+struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
 	__uint(max_entries, 1 << 24);
 } events SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+	__uint(max_entries, MCP_GUARD_METRIC_SLOTS);
+	__type(key, __u32);
+	__type(value, struct mcp_metric_value);
+} metrics SEC(".maps");
 
 struct {
 	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);

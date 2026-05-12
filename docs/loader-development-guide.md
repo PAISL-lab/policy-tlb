@@ -83,16 +83,17 @@ Current schema is intentionally small:
 ## Remaining Loader Roadmap
 
 The loader is already able to load BPF programs, populate tail-call maps, write
-basic policies, read events, reload on `SIGHUP`, and publish GUI-facing JSON.
-The remaining work is about stronger policy data structures, safer reloads,
-agent scoping, observability, and benchmark/report support.
+basic policies, load path prefixes into an LPM trie, read events, reload on
+`SIGHUP`, print metrics on shutdown, and publish GUI-facing JSON. The remaining
+work is about hardening those paths into production-ready behavior, adding agent
+scoping, improving observability transport, and benchmark/report support.
 
 | Framework Phase | Loader Responsibility | Main Files |
 |---|---|---|
-| 2. LPM_TRIE path policy | Convert path prefix rules into trie keys and load the trie map | `policy_loader.c`, `bpf_loader.c` |
-| 3. L2 flag/cache strengthening | Parse rule/cache flags and expose cache behavior settings | `policy_loader.c`, `main.c` |
-| 4. metrics/histogram map | Read metrics maps, aggregate snapshots, publish summaries | `bpf_loader.c`, `main.c`, `unix_socket_server.c` |
-| 5. atomic policy reload | Build/validate inactive policy state and flip active generation last | `policy_loader.c`, `main.c` |
+| 2. LPM_TRIE path policy | Implemented for file-open path prefixes; still needs runtime tests and metadata hardening | `policy_loader.c`, `bpf_loader.c` |
+| 3. L2 flag/cache strengthening | Initial config/rule flags implemented; still needs schema validation and tests | `policy_loader.c`, `main.c` |
+| 4. metrics/histogram map | Initial BPF counters and shutdown summary implemented; still needs periodic/GUI snapshots | `bpf_loader.c`, `main.c`, `unix_socket_server.c` |
+| 5. atomic policy reload | Validation-before-write ordering implemented; full shadow generation remains | `policy_loader.c`, `main.c` |
 | 6. MCP agent scoping | Parse agent profiles and bind policy scopes to pid/tgid/cgroup/comm | `policy_loader.c`, `main.c` |
 | 7. GUI | Stabilize socket schema and add health/reload/metrics messages | `unix_socket_server.c`, `main.c` |
 | 8. benchmark/report | Add benchmark mode and write CSV/JSON reports | `main.c`, new `report_writer.c` |
@@ -101,25 +102,27 @@ agent scoping, observability, and benchmark/report support.
 
 ### 1. LPM_TRIE Path Policy Loader
 
-Current path policy rules are loaded into the fixed-size `policy_rules` array.
-For the next implementation stage, path prefix matching should move to an
-LPM trie map so L3 avoids scanning every path rule.
+Path policy rules are now loaded into `path_policy_trie` and the file-open L3
+slow path consults the trie before falling back to the default action. Command
+and network rules still use the fixed-size `policy_rules` array.
 
-Tasks:
+Implemented:
 
-- Add a path policy trie map id to `loader/bpf_loader.h`.
-- Expose the trie map fd through `mcp_bpf_map_fd`.
-- Define a user-space key builder matching the BPF trie key layout.
+- Path policy trie map id in `loader/bpf_loader.h`.
+- Trie map fd exposure through `mcp_bpf_map_fd`.
+- User-space trie key/value construction.
+- Path prefixes loaded from `dangerous_paths.json`.
+- Trie cleanup during successful reload.
+
+Remaining:
+
 - Normalize path policy values before loading:
   - reject empty paths
   - require absolute paths
   - collapse trailing slashes except `/`
   - reject values longer than `MCP_GUARD_PATH_LEN`
-- Convert each prefix to a trie key and update the BPF map.
-- Keep existing array rules for command and network policies.
-- Decide the transition mode:
-  - compatibility mode: keep path rules in both array and trie
-  - optimized mode: path prefixes only in trie, metadata in an auxiliary map
+- Add runtime tests that prove prefix deny behavior through the trie.
+- Decide final metadata layout if path rules move fully out of `policy_rules`.
 
 Acceptance:
 
@@ -130,20 +133,23 @@ Acceptance:
 
 ### 2. L2 Flag And Cache Configuration
 
-L2 currently makes a few hard-coded cheap decisions. The loader should make
-these behaviors configurable without forcing BPF code changes for every test.
+L2 now reads `policy_config.flags`, and the loader parses initial config/rule
+flags from JSON. This keeps cheap-path behavior tunable without recompiling BPF.
 
-Tasks:
+Implemented:
 
-- Extend policy JSON with optional flags, for example:
-  - `cache_followups`
-  - `audit_allowed`
-  - `skip_dir_read`
-  - `deny_on_tailcall_fail`
-- Validate flags per rule type.
-- Store global cache behavior in `policy_config`.
-- Store per-rule flags in `mcp_policy_rule.flags`.
+- `skip_dir_read`
+- `cache_file_followups`
+- `deny_tailcall_fail`
+- `skip_l2_safe`
+- Global flags in `policy_config.flags`.
+- Per-rule flags in `mcp_policy_rule.flags`.
+
+Remaining:
+
+- Validate flags per rule type and reject unknown flag names.
 - Print loaded flag summaries at startup in verbose mode.
+- Add tests for follow-up cache behavior and L2 skip behavior.
 
 Acceptance:
 
@@ -153,18 +159,22 @@ Acceptance:
 
 ### 3. Metrics And Histogram Reader
 
-BPF currently emits per-event timing through the ring buffer. The next step is
-to add map-based counters and histograms so the loader can report hit ratio and
-latency distribution without relying only on deny events.
+BPF now records per-CPU counters and coarse latency histograms by hook, layer,
+and action. The loader prints a final metrics summary on shutdown.
 
-Tasks:
+Implemented:
 
-- Add map ids for metrics/histogram maps.
+- Metrics map id in `loader/bpf_loader.h`.
+- Per-CPU metrics reads in the loader.
+- Count, total, min, max, and 8 histogram buckets.
+- Shutdown summary.
+
+Remaining:
+
 - Read metrics periodically in the main loop.
-- Aggregate by hook, layer, action, and reason.
-- Compute L1/L2/L3 hit ratios.
+- Aggregate by reason.
+- Compute explicit L1/L2/L3 hit ratios.
 - Publish a JSON message with `"type":"metrics_snapshot"`.
-- Print a final summary on shutdown.
 
 Acceptance:
 
@@ -175,18 +185,23 @@ Acceptance:
 
 ### 4. Atomic Policy Reload
 
-The current reload path validates some inputs, clears the rule array, loads new
-entries, then increments `global_epoch`. This is good enough for a PoC but not
-for a robust live daemon.
+The current reload path parses policy files into memory first, writes BPF maps
+after successful parsing, and increments `global_epoch` last. This avoids the
+old clear-before-validate behavior, but it is not yet a full shadow-generation
+swap.
 
-Tasks:
+Implemented:
 
 - Parse every policy file into memory first.
-- Validate the complete policy set before touching BPF maps.
+- Build the complete policy state before touching BPF maps.
+- Increment `global_epoch` only after policy maps/config are updated.
+
+Remaining:
+
+- Validate the complete policy set more strictly before touching BPF maps.
 - Add an active generation field to policy config when the BPF side supports it.
 - Load new data into inactive generation maps or shadow slots.
 - Flip the active generation last.
-- Increment `global_epoch` only after the full policy state is visible.
 - On failure, leave the existing policy and epoch unchanged.
 
 Acceptance:

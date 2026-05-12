@@ -13,7 +13,7 @@
 #include "../include/common.h"
 
 struct policy_load_state {
-	int rules_fd;
+	struct mcp_policy_rule rules[MCP_GUARD_MAX_RULES];
 	__u32 next_index;
 };
 
@@ -134,6 +134,18 @@ static int json_get_bool(char *obj, const char *key, __u32 *out)
 	return -EINVAL;
 }
 
+static void json_update_flag(char *obj, const char *key, __u32 flag, __u32 *flags)
+{
+	__u32 enabled;
+
+	if (json_get_bool(obj, key, &enabled) != 0)
+		return;
+	if (enabled)
+		*flags |= flag;
+	else
+		*flags &= ~flag;
+}
+
 static __u32 parse_action(const char *value)
 {
 	if (strcmp(value, "deny") == 0)
@@ -204,7 +216,6 @@ static __u64 path_resource_id(const char *value)
 static int add_rule(struct policy_load_state *state, struct mcp_policy_rule *rule)
 {
 	__u32 index;
-	int err;
 
 	if (state->next_index >= MCP_GUARD_MAX_RULES)
 		return -ENOSPC;
@@ -212,10 +223,7 @@ static int add_rule(struct policy_load_state *state, struct mcp_policy_rule *rul
 	index = state->next_index;
 	rule->enabled = 1;
 	rule->rule_id = index + 1;
-	err = bpf_map_update_elem(state->rules_fd, &index, rule, BPF_ANY);
-	if (err)
-		return -errno;
-
+	state->rules[index] = *rule;
 	state->next_index++;
 	return 0;
 }
@@ -257,6 +265,8 @@ static int load_rule_file(const char *path, __u32 forced_type,
 
 		json_get_string(cursor, "name", name, sizeof(name));
 		json_get_string(cursor, "action", action, sizeof(action));
+		json_update_flag(cursor, "skip_l2_safe",
+				 MCP_GUARD_RULE_F_SKIP_L2_SAFE, &rule.flags);
 
 		rule.rule_type = forced_type;
 		rule.action = parse_action(action);
@@ -306,19 +316,78 @@ static int load_config_file(const char *path, struct mcp_policy_config *config)
 		config->default_action = parse_action(action);
 	json_get_bool(buf, "enforce", &config->enforce);
 	json_get_bool(buf, "audit_allowed", &config->audit_allowed);
+	json_update_flag(buf, "skip_dir_read", MCP_GUARD_POLICY_F_SKIP_DIR_READ,
+			 &config->flags);
+	json_update_flag(buf, "cache_file_followups",
+			 MCP_GUARD_POLICY_F_CACHE_FILE_FOLLOWUPS, &config->flags);
+	json_update_flag(buf, "deny_tailcall_fail",
+			 MCP_GUARD_POLICY_F_DENY_TAILCALL_FAIL, &config->flags);
 
 	free(buf);
 	return 0;
 }
 
-static int clear_rules(int rules_fd)
+static int write_rules(int rules_fd, const struct policy_load_state *state)
 {
-	struct mcp_policy_rule empty = {};
-
 	for (__u32 i = 0; i < MCP_GUARD_MAX_RULES; i++) {
-		if (bpf_map_update_elem(rules_fd, &i, &empty, BPF_ANY) != 0)
+		struct mcp_policy_rule rule = {};
+
+		if (i < state->next_index)
+			rule = state->rules[i];
+		if (bpf_map_update_elem(rules_fd, &i, &rule, BPF_ANY) != 0)
 			return -errno;
 	}
+	return 0;
+}
+
+static int clear_path_trie(int path_trie_fd)
+{
+	struct mcp_path_lpm_key key = {};
+
+	if (path_trie_fd < 0)
+		return 0;
+
+	while (bpf_map_get_next_key(path_trie_fd, NULL, &key) == 0)
+		bpf_map_delete_elem(path_trie_fd, &key);
+	return 0;
+}
+
+static __u32 path_prefix_bits(const char *path)
+{
+	return (__u32)strnlen(path, MCP_GUARD_PATH_LEN) * 8;
+}
+
+static int write_path_trie(int path_trie_fd, const struct policy_load_state *state)
+{
+	if (path_trie_fd < 0)
+		return 0;
+
+	for (__u32 i = 0; i < state->next_index; i++) {
+		const struct mcp_policy_rule *rule = &state->rules[i];
+		struct mcp_path_lpm_key key = {};
+		struct mcp_path_policy_value value = {};
+
+		if (rule->rule_type != MCP_GUARD_RULE_PATH_PREFIX)
+			continue;
+		if (!rule->value[0] || rule->value[0] != '/')
+			return -EINVAL;
+
+		key.prefixlen = path_prefix_bits(rule->value);
+		snprintf(key.path, sizeof(key.path), "%s", rule->value);
+
+		value.enabled = rule->enabled;
+		value.rule_id = rule->rule_id;
+		value.action = rule->action;
+		value.hook_mask = rule->hook_mask;
+		value.flags = rule->flags;
+		value.value_len = rule->value_len;
+		value.resource_id = rule->resource_id;
+		snprintf(value.name, sizeof(value.name), "%s", rule->name);
+
+		if (bpf_map_update_elem(path_trie_fd, &key, &value, BPF_ANY) != 0)
+			return -errno;
+	}
+
 	return 0;
 }
 
@@ -352,17 +421,19 @@ static int join_policy_path(char *out, size_t out_len,
 
 int mcp_policy_load_dir(const char *policy_dir,
 			int rules_fd,
+			int path_trie_fd,
 			int config_fd,
 			int epoch_fd,
 			struct mcp_policy_load_result *result)
 {
-	struct policy_load_state state = {
-		.rules_fd = rules_fd,
-	};
+	struct policy_load_state state = {};
 	struct mcp_policy_config config = {
 		.default_action = MCP_GUARD_ACTION_ALLOW,
 		.enforce = 1,
 		.audit_allowed = 0,
+		.flags = MCP_GUARD_POLICY_F_SKIP_DIR_READ |
+			 MCP_GUARD_POLICY_F_CACHE_FILE_FOLLOWUPS |
+			 MCP_GUARD_POLICY_F_DENY_TAILCALL_FAIL,
 	};
 	char path[PATH_MAX];
 	__u32 key = MCP_GUARD_CONFIG_KEY;
@@ -371,10 +442,6 @@ int mcp_policy_load_dir(const char *policy_dir,
 
 	if (!policy_dir || rules_fd < 0 || config_fd < 0 || epoch_fd < 0)
 		return -EINVAL;
-
-	err = clear_rules(rules_fd);
-	if (err)
-		return err;
 
 	err = join_policy_path(path, sizeof(path), policy_dir, "default_policy.json");
 	if (err)
@@ -405,6 +472,16 @@ int mcp_policy_load_dir(const char *policy_dir,
 		return err;
 
 	config.rule_count = state.next_index;
+
+	err = clear_path_trie(path_trie_fd);
+	if (err)
+		return err;
+	err = write_path_trie(path_trie_fd, &state);
+	if (err)
+		return err;
+	err = write_rules(rules_fd, &state);
+	if (err)
+		return err;
 	if (bpf_map_update_elem(config_fd, &key, &config, BPF_ANY) != 0)
 		return -errno;
 

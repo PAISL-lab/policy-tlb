@@ -31,4 +31,12 @@ struct mcp_event {
 	char rule_name[MCP_GUARD_RULE_NAME_LEN];
 };
 
+struct mcp_metric_value {
+	__u64 count;
+	__u64 total_ns;
+	__u64 min_ns;
+	__u64 max_ns;
+	__u64 buckets[MCP_GUARD_HIST_BUCKETS];
+};
+
 #endif

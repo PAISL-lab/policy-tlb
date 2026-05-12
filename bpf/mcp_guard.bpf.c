@@ -20,6 +20,15 @@ static __always_inline int mcp_action_ret(__u32 action)
 	return 0;
 }
 
+static __always_inline int mcp_recorded_action_ret(__u32 hook_id,
+						   __u32 action,
+						   __u32 layer,
+						   __u64 start_ns)
+{
+	mcp_record_metric(hook_id, action, layer, start_ns);
+	return mcp_action_ret(action);
+}
+
 static __always_inline int mcp_tail_fail_ret(void)
 {
 	return -MCP_GUARD_DENY_ERRNO;
@@ -139,6 +148,9 @@ static __always_inline void mcp_cache_file_followups(__u64 resource_id,
 {
 	struct mcp_cache_key key = {};
 
+	if (!(mcp_l2_policy_flags() & MCP_GUARD_POLICY_F_CACHE_FILE_FOLLOWUPS))
+		return;
+
 	mcp_fill_cache_key(&key, MCP_GUARD_HOOK_FILE_READ, resource_id);
 	mcp_l1_store(&key, action, 0, rule_id, reason);
 
@@ -174,7 +186,9 @@ int BPF_PROG(mcp_guard_bprm_check_security, struct linux_binprm *bprm, int ret)
 				       MCP_GUARD_REASON_L1_CACHE, cached.rule_id,
 				       resource_id, start_ns, scratch->path, 0, 0, 0, 0,
 				       mcp_should_block(action) ? MCP_GUARD_DENY_ERRNO : 0);
-		return mcp_action_ret(action);
+			return mcp_recorded_action_ret(MCP_GUARD_HOOK_EXEC, action,
+						       MCP_GUARD_LAYER_L1,
+						       start_ns);
 	}
 
 	bpf_tail_call(ctx, &exec_pipeline, MCP_GUARD_TAIL_L2);
@@ -211,7 +225,8 @@ int BPF_PROG(mcp_guard_bprm_check_security_l2, struct linux_binprm *bprm, int re
 		       scratch->path, 0, 0, 0, 0,
 		       mcp_should_block(action) ? MCP_GUARD_DENY_ERRNO : 0);
 
-	return mcp_action_ret(action);
+	return mcp_recorded_action_ret(MCP_GUARD_HOOK_EXEC, action,
+				       MCP_GUARD_LAYER_L2, start_ns);
 }
 
 SEC("lsm/bprm_check_security")
@@ -247,7 +262,8 @@ int BPF_PROG(mcp_guard_bprm_check_security_l3, struct linux_binprm *bprm, int re
 			       scratch->path, scratch->rule_name, 0, 0, 0,
 			       mcp_should_block(action) ? MCP_GUARD_DENY_ERRNO : 0);
 
-	return mcp_action_ret(action);
+	return mcp_recorded_action_ret(MCP_GUARD_HOOK_EXEC, action,
+				       MCP_GUARD_LAYER_L3, start_ns);
 }
 
 SEC("lsm/file_open")
@@ -272,7 +288,9 @@ int BPF_PROG(mcp_guard_file_open, struct file *file, int ret)
 				       MCP_GUARD_REASON_L1_CACHE, cached.rule_id,
 				       resource_id, start_ns, 0, 0, 0, 0, 0,
 				       mcp_should_block(action) ? MCP_GUARD_DENY_ERRNO : 0);
-		return mcp_action_ret(action);
+			return mcp_recorded_action_ret(MCP_GUARD_HOOK_FILE_OPEN,
+						       action, MCP_GUARD_LAYER_L1,
+						       start_ns);
 	}
 
 	bpf_tail_call(ctx, &file_open_pipeline, MCP_GUARD_TAIL_L2);
@@ -284,6 +302,7 @@ int BPF_PROG(mcp_guard_file_open_l2, struct file *file, int ret)
 {
 	struct mcp_cache_key key = {};
 	__u64 resource_id = mcp_file_resource_id(file);
+	__u64 start_ns = mcp_get_tail_start();
 	__u32 flags = 0;
 	int action;
 
@@ -299,7 +318,8 @@ int BPF_PROG(mcp_guard_file_open_l2, struct file *file, int ret)
 	mcp_fill_cache_key(&key, MCP_GUARD_HOOK_FILE_OPEN, resource_id);
 	mcp_l1_store(&key, action, flags, 0, MCP_GUARD_REASON_L2_SAFE);
 	mcp_cache_file_followups(resource_id, action, 0, MCP_GUARD_REASON_L2_SAFE);
-	return mcp_action_ret(action);
+	return mcp_recorded_action_ret(MCP_GUARD_HOOK_FILE_OPEN, action,
+				       MCP_GUARD_LAYER_L2, start_ns);
 }
 
 SEC("lsm/file_open")
@@ -336,7 +356,8 @@ int BPF_PROG(mcp_guard_file_open_l3, struct file *file, int ret)
 			       scratch->path, scratch->rule_name, 0, 0, 0,
 			       mcp_should_block(action) ? MCP_GUARD_DENY_ERRNO : 0);
 
-	return mcp_action_ret(action);
+	return mcp_recorded_action_ret(MCP_GUARD_HOOK_FILE_OPEN, action,
+				       MCP_GUARD_LAYER_L3, start_ns);
 }
 
 SEC("lsm/file_permission")
@@ -364,7 +385,9 @@ int BPF_PROG(mcp_guard_file_permission, struct file *file, int mask, int ret)
 				       MCP_GUARD_REASON_L1_CACHE, cached.rule_id,
 				       resource_id, start_ns, 0, 0, 0, 0, 0,
 				       mcp_should_block(action) ? MCP_GUARD_DENY_ERRNO : 0);
-		return mcp_action_ret(action);
+			return mcp_recorded_action_ret(hook_id, action,
+						       MCP_GUARD_LAYER_L1,
+						       start_ns);
 	}
 
 	bpf_tail_call(ctx, &file_permission_pipeline, MCP_GUARD_TAIL_L2);
@@ -376,6 +399,7 @@ int BPF_PROG(mcp_guard_file_permission_l2, struct file *file, int mask, int ret)
 {
 	struct mcp_cache_key key = {};
 	__u64 resource_id = mcp_file_resource_id(file);
+	__u64 start_ns = mcp_get_tail_start();
 	__u32 hook_id = MCP_GUARD_HOOK_FILE_READ;
 	__u32 flags = 0;
 	int action;
@@ -394,7 +418,8 @@ int BPF_PROG(mcp_guard_file_permission_l2, struct file *file, int mask, int ret)
 
 	mcp_fill_cache_key(&key, hook_id, resource_id);
 	mcp_l1_store(&key, action, flags, 0, MCP_GUARD_REASON_L2_SAFE);
-	return mcp_action_ret(action);
+	return mcp_recorded_action_ret(hook_id, action, MCP_GUARD_LAYER_L2,
+				       start_ns);
 }
 
 SEC("lsm/file_permission")
@@ -432,7 +457,8 @@ int BPF_PROG(mcp_guard_file_permission_l3, struct file *file, int mask, int ret)
 			       0, scratch->rule_name, 0, 0, 0,
 			       mcp_should_block(action) ? MCP_GUARD_DENY_ERRNO : 0);
 
-	return mcp_action_ret(action);
+	return mcp_recorded_action_ret(hook_id, action, MCP_GUARD_LAYER_L3,
+				       start_ns);
 }
 
 SEC("lsm/socket_connect")
@@ -468,7 +494,9 @@ int BPF_PROG(mcp_guard_socket_connect, struct socket *sock, struct sockaddr *add
 					       0, 0, family, ipv4_addr, port,
 					       mcp_should_block(action) ?
 					       MCP_GUARD_DENY_ERRNO : 0);
-			return mcp_action_ret(action);
+				return mcp_recorded_action_ret(
+					MCP_GUARD_HOOK_SOCKET_CONNECT, action,
+					MCP_GUARD_LAYER_L1, start_ns);
 		}
 	}
 
@@ -481,6 +509,7 @@ int BPF_PROG(mcp_guard_socket_connect_l2, struct socket *sock, struct sockaddr *
 	     int addrlen, int ret)
 {
 	__u16 family = 0;
+	__u64 start_ns = mcp_get_tail_start();
 	int action;
 
 	(void)sock;
@@ -495,7 +524,8 @@ int BPF_PROG(mcp_guard_socket_connect_l2, struct socket *sock, struct sockaddr *
 		return mcp_tail_fail_ret();
 	}
 
-	return mcp_action_ret(action);
+	return mcp_recorded_action_ret(MCP_GUARD_HOOK_SOCKET_CONNECT, action,
+				       MCP_GUARD_LAYER_L2, start_ns);
 }
 
 SEC("lsm/socket_connect")
@@ -537,5 +567,6 @@ int BPF_PROG(mcp_guard_socket_connect_l3, struct socket *sock, struct sockaddr *
 			       ipv4_addr, port,
 			       mcp_should_block(action) ? MCP_GUARD_DENY_ERRNO : 0);
 
-	return mcp_action_ret(action);
+	return mcp_recorded_action_ret(MCP_GUARD_HOOK_SOCKET_CONNECT, action,
+				       MCP_GUARD_LAYER_L3, start_ns);
 }

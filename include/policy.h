@@ -12,6 +12,8 @@ struct mcp_policy_config {
 	__u32 enforce;
 	__u32 audit_allowed;
 	__u32 rule_count;
+	__u32 flags;
+	__u32 active_generation;
 };
 
 struct mcp_policy_rule {
@@ -27,6 +29,22 @@ struct mcp_policy_rule {
 	__u32 ipv4_mask;
 	__u64 resource_id;
 	char value[MCP_GUARD_RULE_VALUE_LEN];
+	char name[MCP_GUARD_RULE_NAME_LEN];
+};
+
+struct mcp_path_lpm_key {
+	__u32 prefixlen;
+	char path[MCP_GUARD_PATH_LEN];
+};
+
+struct mcp_path_policy_value {
+	__u32 enabled;
+	__u32 rule_id;
+	__u32 action;
+	__u32 hook_mask;
+	__u32 flags;
+	__u32 value_len;
+	__u64 resource_id;
 	char name[MCP_GUARD_RULE_NAME_LEN];
 };
 

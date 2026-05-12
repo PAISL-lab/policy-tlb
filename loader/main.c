@@ -7,6 +7,9 @@
 #include <sys/resource.h>
 #include <unistd.h>
 
+#include <bpf/bpf.h>
+#include <bpf/libbpf.h>
+
 #include "../include/common.h"
 #include "bpf_loader.h"
 #include "policy_loader.h"
@@ -80,6 +83,75 @@ static double model_us_for_layer(__u32 layer)
 	}
 }
 
+static void decode_metric_index(__u32 index, __u32 *hook, __u32 *layer,
+				__u32 *action)
+{
+	*hook = (index >> 5) & 0x7;
+	*layer = (index >> 2) & 0x7;
+	*action = index & 0x3;
+}
+
+static void print_metrics_summary(int metrics_fd)
+{
+	int cpus = libbpf_num_possible_cpus();
+	size_t value_size;
+	struct mcp_metric_value *values;
+
+	if (metrics_fd < 0 || cpus <= 0)
+		return;
+
+	value_size = sizeof(*values) * (size_t)cpus;
+	values = calloc(1, value_size);
+	if (!values)
+		return;
+
+	printf("metrics summary:\n");
+	for (__u32 index = 0; index < MCP_GUARD_METRIC_SLOTS; index++) {
+		struct mcp_metric_value total = {};
+		__u32 hook;
+		__u32 layer;
+		__u32 action;
+
+		if (bpf_map_lookup_elem(metrics_fd, &index, values) != 0)
+			continue;
+
+		for (int cpu = 0; cpu < cpus; cpu++) {
+			struct mcp_metric_value *v = &values[cpu];
+
+			total.count += v->count;
+			total.total_ns += v->total_ns;
+			if (v->min_ns && (!total.min_ns || v->min_ns < total.min_ns))
+				total.min_ns = v->min_ns;
+			if (v->max_ns > total.max_ns)
+				total.max_ns = v->max_ns;
+			for (__u32 b = 0; b < MCP_GUARD_HIST_BUCKETS; b++)
+				total.buckets[b] += v->buckets[b];
+		}
+
+		if (!total.count)
+			continue;
+
+		decode_metric_index(index, &hook, &layer, &action);
+		printf("  hook=%s layer=%s action=%s count=%llu avg_ns=%llu "
+		       "min_ns=%llu max_ns=%llu buckets=[%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu]\n",
+		       hook_name(hook), layer_name(layer), action_name(action),
+		       (unsigned long long)total.count,
+		       (unsigned long long)(total.total_ns / total.count),
+		       (unsigned long long)total.min_ns,
+		       (unsigned long long)total.max_ns,
+		       (unsigned long long)total.buckets[0],
+		       (unsigned long long)total.buckets[1],
+		       (unsigned long long)total.buckets[2],
+		       (unsigned long long)total.buckets[3],
+		       (unsigned long long)total.buckets[4],
+		       (unsigned long long)total.buckets[5],
+		       (unsigned long long)total.buckets[6],
+		       (unsigned long long)total.buckets[7]);
+	}
+
+	free(values);
+}
+
 static void handle_signal(int signo)
 {
 	if (signo == SIGHUP)
@@ -143,6 +215,7 @@ static int load_policy_or_report(const char *policy_dir,
 
 	err = mcp_policy_load_dir(policy_dir,
 				  mcp_bpf_map_fd(guard, MCP_BPF_MAP_POLICY_RULES),
+				  mcp_bpf_map_fd(guard, MCP_BPF_MAP_PATH_POLICY_TRIE),
 				  mcp_bpf_map_fd(guard, MCP_BPF_MAP_POLICY_CONFIG),
 				  mcp_bpf_map_fd(guard, MCP_BPF_MAP_GLOBAL_EPOCH),
 				  result);
@@ -226,6 +299,8 @@ int main(int argc, char **argv)
 	}
 
 out:
+	if (guard)
+		print_metrics_summary(mcp_bpf_map_fd(guard, MCP_BPF_MAP_METRICS));
 	mcp_ringbuf_reader_close(reader);
 	mcp_unix_socket_server_stop(runtime.server);
 	mcp_bpf_destroy(guard);

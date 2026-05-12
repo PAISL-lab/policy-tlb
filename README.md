@@ -88,6 +88,9 @@ The current PoC implements:
 - L1 decision cache using a BPF LRU per-CPU hash map.
 - Physical L1 -> L2 -> L3 separation using per-hook BPF tail-call
   `PROG_ARRAY` maps.
+- LPM trie backed path-prefix policy lookup for the file-open slow path.
+- Runtime metrics and histogram counters by hook, layer, and action.
+- Configurable L2/cache behavior flags loaded from policy config.
 - Per-CPU tail-call state and scratch buffers to keep the BPF stack within
   verifier limits.
 - Global epoch invalidation using a BPF array map.
@@ -174,7 +177,7 @@ docs/
        miss (tail call)                 |
        v                                |
   L3 Slow Path                          |
-  policy map scan, path/socket/exec     |
+  trie/map lookup, path/socket/exec     |
   matching, cache update, event emit    |
                        |
                        v
@@ -208,7 +211,7 @@ tail-call target
     miss -> bpf_tail_call(..., L3)
 
 tail-call target
-  L3 policy scan
+  L3 trie/map policy lookup
     -> cache + emit event when needed + return
 ```
 
@@ -257,12 +260,17 @@ L2 avoids expensive string/path logic for obviously safe resources. For example,
 non-regular files and selected directory read cases can be allowed without
 policy string matching.
 
+The loader can tune selected L2/cache behaviors through `policy_config.flags`.
+Current flags include directory-read skipping, file follow-up cache population,
+and fail-closed tail-call behavior.
+
 ### L3 Slow Path
 
 L3 performs deeper checks:
 
 - command prefix checks for exec
-- path/resource matching for file access
+- LPM trie backed path-prefix matching for file-open policy
+- resource-id matching for follow-up file access
 - IPv4/port matching for socket connect
 - ring buffer event emission for deny/audit decisions
 - cache population for follow-up events
@@ -275,12 +283,32 @@ string availability in every hook.
 
 Policy reload does not scan and delete every cache entry. Instead:
 
-1. User space validates and writes policy maps.
-2. User space increments `global_epoch`.
-3. L1 cache entries with an old epoch become invalid automatically.
+1. User space parses and validates policy files into memory.
+2. User space writes policy maps only after validation succeeds.
+3. User space increments `global_epoch` last.
+4. L1 cache entries with an old epoch become invalid automatically.
 
 This makes global invalidation O(1), which is the core lock-free epoch idea from
 the paper.
+
+Current reload is atomic at the validation/order level: a malformed policy file
+is rejected before map writes begin. Full shadow-generation policy swapping is
+still future work.
+
+## Metrics
+
+The BPF side records per-CPU metrics by hook, layer, and action. Each metric
+entry tracks:
+
+- decision count
+- total latency
+- minimum latency
+- maximum latency
+- 8 coarse latency histogram buckets
+
+The loader prints a metrics summary on shutdown. Ring buffer events remain the
+source for detailed deny/audit records, while the metrics map gives aggregate
+visibility even when individual allow events are not emitted.
 
 ## Policy Format
 

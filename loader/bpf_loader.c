@@ -162,6 +162,10 @@ int mcp_bpf_map_fd(const struct mcp_bpf *guard, enum mcp_bpf_map_id id)
 		return bpf_map__fd(guard->skel->maps.policy_config);
 	case MCP_BPF_MAP_POLICY_RULES:
 		return bpf_map__fd(guard->skel->maps.policy_rules);
+	case MCP_BPF_MAP_PATH_POLICY_TRIE:
+		return bpf_map__fd(guard->skel->maps.path_policy_trie);
+	case MCP_BPF_MAP_METRICS:
+		return bpf_map__fd(guard->skel->maps.metrics);
 	case MCP_BPF_MAP_EVENTS:
 		return bpf_map__fd(guard->skel->maps.events);
 	default:

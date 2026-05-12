@@ -10,6 +10,7 @@ struct mcp_policy_load_result {
 
 int mcp_policy_load_dir(const char *policy_dir,
 			int rules_fd,
+			int path_trie_fd,
 			int config_fd,
 			int epoch_fd,
 			struct mcp_policy_load_result *result);

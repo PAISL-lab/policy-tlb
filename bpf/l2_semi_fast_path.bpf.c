@@ -3,6 +3,19 @@
 
 #include "l1_fast_path.bpf.c"
 
+static __always_inline __u32 mcp_l2_policy_flags(void)
+{
+	__u32 key = MCP_GUARD_CONFIG_KEY;
+	struct mcp_policy_config *cfg;
+
+	cfg = bpf_map_lookup_elem(&policy_config, &key);
+	if (!cfg)
+		return MCP_GUARD_POLICY_F_SKIP_DIR_READ |
+		       MCP_GUARD_POLICY_F_CACHE_FILE_FOLLOWUPS |
+		       MCP_GUARD_POLICY_F_DENY_TAILCALL_FAIL;
+	return cfg->flags;
+}
+
 static __always_inline int mcp_l2_file_decide(struct file *file,
 					      __u32 hook_id,
 					      __u32 *flags)
@@ -21,13 +34,17 @@ static __always_inline int mcp_l2_file_decide(struct file *file,
 	mode = BPF_CORE_READ(inode, i_mode);
 	type = mode & MCP_GUARD_S_IFMT;
 
+	if (mcp_l2_policy_flags() & MCP_GUARD_RULE_F_SKIP_L2_SAFE)
+		return MCP_GUARD_ACTION_UNSET;
+
 	if (type != MCP_GUARD_S_IFREG && type != MCP_GUARD_S_IFDIR) {
 		if (flags)
 			*flags = 1;
 		return MCP_GUARD_ACTION_ALLOW;
 	}
 
-	if (hook_id == MCP_GUARD_HOOK_FILE_READ && type == MCP_GUARD_S_IFDIR) {
+	if ((mcp_l2_policy_flags() & MCP_GUARD_POLICY_F_SKIP_DIR_READ) &&
+	    hook_id == MCP_GUARD_HOOK_FILE_READ && type == MCP_GUARD_S_IFDIR) {
 		if (flags)
 			*flags = 2;
 		return MCP_GUARD_ACTION_ALLOW;
