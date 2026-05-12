@@ -80,6 +80,21 @@ static void close_client(struct mcp_unix_socket_server *server, int index)
 	server->clients[index] = -1;
 }
 
+static void publish_line(struct mcp_unix_socket_server *server,
+			 const char *line, size_t len)
+{
+	if (!server || !line || !len)
+		return;
+
+	mcp_unix_socket_server_accept(server);
+	for (int i = 0; i < MCP_GUARD_MAX_CLIENTS; i++) {
+		if (server->clients[i] < 0)
+			continue;
+		if (write(server->clients[i], line, len) < 0)
+			close_client(server, i);
+	}
+}
+
 int mcp_unix_socket_server_start(const char *path,
 				 struct mcp_unix_socket_server **out)
 {
@@ -172,9 +187,8 @@ void mcp_unix_socket_server_publish(struct mcp_unix_socket_server *server,
 	if (!server || !event)
 		return;
 
-	mcp_unix_socket_server_accept(server);
 	len = snprintf(line, sizeof(line),
-	       "{\"ts_ns\":%llu,\"pid\":%u,\"uid\":%u,\"hook\":\"%s\","
+	       "{\"type\":\"event\",\"ts_ns\":%llu,\"pid\":%u,\"uid\":%u,\"hook\":\"%s\","
 		       "\"action\":\"%s\",\"layer\":\"%s\",\"duration_ns\":%llu,"
 		       "\"rule_id\":%u,\"error\":%u,"
 		       "\"path\":\"%s\",\"rule\":\"%s\",\"port\":%u}\n",
@@ -187,12 +201,36 @@ void mcp_unix_socket_server_publish(struct mcp_unix_socket_server *server,
 	if (len <= 0)
 		return;
 
-	for (int i = 0; i < MCP_GUARD_MAX_CLIENTS; i++) {
-		if (server->clients[i] < 0)
-			continue;
-		if (write(server->clients[i], line, (size_t)len) < 0)
-			close_client(server, i);
-	}
+	publish_line(server, line, (size_t)len);
+}
+
+void mcp_unix_socket_server_publish_metrics(struct mcp_unix_socket_server *server,
+					    __u64 total_count,
+					    __u64 l1_count,
+					    __u64 l2_count,
+					    __u64 l3_count)
+{
+	char line[512];
+	int len;
+
+	if (!server)
+		return;
+
+	len = snprintf(line, sizeof(line),
+		       "{\"type\":\"metrics_snapshot\",\"total_count\":%llu,"
+		       "\"layers\":{\"L1\":%llu,\"L2\":%llu,\"L3\":%llu},"
+		       "\"ratios\":{\"L1\":%.6f,\"L2\":%.6f,\"L3\":%.6f}}\n",
+		       (unsigned long long)total_count,
+		       (unsigned long long)l1_count,
+		       (unsigned long long)l2_count,
+		       (unsigned long long)l3_count,
+		       total_count ? (double)l1_count / (double)total_count : 0.0,
+		       total_count ? (double)l2_count / (double)total_count : 0.0,
+		       total_count ? (double)l3_count / (double)total_count : 0.0);
+	if (len <= 0)
+		return;
+
+	publish_line(server, line, (size_t)len);
 }
 
 void mcp_unix_socket_server_stop(struct mcp_unix_socket_server *server)

@@ -257,9 +257,9 @@ loader에서 곧 추가될 것으로 예상되는 필드:
    - `--demo gui/samples/events.ndjson` option을 추가합니다.
    - root, BPF, loader 없이도 GUI 개발이 가능해야 합니다.
 
-7. metrics message를 준비합니다.
+7. metrics message를 route합니다.
    - 초기에는 shutdown summary에서 유도 가능한 event counter를 표시합니다.
-   - loader가 주기적 `metrics_snapshot`을 추가하면 `MetricsView`로 route합니다.
+   - loader의 `metrics_snapshot` message를 `MetricsView`로 route합니다.
    - 알 수 없는 message type은 안전하게 무시합니다.
 
 ## 테스트 계획
@@ -291,7 +291,7 @@ python3 gui/run_gui.py
 
 - deny/audit record가 들어오면 event가 live update됩니다.
 - L1/L2/L3 counter가 event-derived data로 갱신됩니다.
-- loader가 `metrics_snapshot`을 emit하기 시작하면 GUI 재시작 없이 Metrics tab이 갱신됩니다.
+- loader의 `metrics_snapshot` message가 GUI 재시작 없이 Metrics tab을 갱신합니다.
 
 loader 없이 수동 테스트:
 

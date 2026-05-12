@@ -92,7 +92,7 @@ scoping, improving observability transport, and benchmark/report support.
 |---|---|---|
 | 2. LPM_TRIE path policy | Complete for current PoC: path prefixes are normalized, loaded into LPM trie, and covered by runtime tests | `policy_loader.c`, `bpf_loader.c` |
 | 3. L2 flag/cache strengthening | Complete for current PoC: separated config/rule flags, startup summary, unknown flag rejection, and runtime L2 test | `policy_loader.c`, `main.c` |
-| 4. metrics/histogram map | Initial BPF counters and shutdown summary implemented; still needs periodic/GUI snapshots | `bpf_loader.c`, `main.c`, `unix_socket_server.c` |
+| 4. metrics/histogram map | Complete for current PoC: shutdown summary, periodic snapshots, layer ratios, and GUI metrics JSON | `bpf_loader.c`, `main.c`, `unix_socket_server.c` |
 | 5. atomic policy reload | Validation-before-write ordering implemented; full shadow generation remains | `policy_loader.c`, `main.c` |
 | 6. MCP agent scoping | Parse agent profiles and bind policy scopes to pid/tgid/cgroup/comm | `policy_loader.c`, `main.c` |
 | 7. GUI | Stabilize socket schema and add health/reload/metrics messages | `unix_socket_server.c`, `main.c` |
@@ -164,7 +164,8 @@ Acceptance:
 ### 3. Metrics And Histogram Reader
 
 BPF now records per-CPU counters and coarse latency histograms by hook, layer,
-and action. The loader prints a final metrics summary on shutdown.
+and action. The loader prints a final metrics summary on shutdown and can emit
+periodic metrics snapshots while running.
 
 Implemented:
 
@@ -172,13 +173,17 @@ Implemented:
 - Per-CPU metrics reads in the loader.
 - Count, total, min, max, and 8 histogram buckets.
 - Shutdown summary.
+- `--metrics-interval` CLI option.
+- Periodic `metrics snapshot` stdout output.
+- Explicit L1/L2/L3 layer ratios.
+- GUI-facing JSON messages with `"type":"metrics_snapshot"`.
+- `tests/test_metrics_snapshot.sh` coverage.
 
 Remaining:
 
-- Read metrics periodically in the main loop.
 - Aggregate by reason.
-- Compute explicit L1/L2/L3 hit ratios.
-- Publish a JSON message with `"type":"metrics_snapshot"`.
+- Add per-hook histogram JSON details to the GUI snapshot if the GUI needs
+  full bucket rendering instead of aggregate ratios.
 
 Acceptance:
 
@@ -186,6 +191,7 @@ Acceptance:
   metrics.
 - GUI clients can distinguish event messages from metrics messages.
 - Metrics do not block ring buffer polling.
+- Tests can receive a `metrics_snapshot` message over `/tmp/mcp-guard.sock`.
 
 ### 4. Atomic Policy Reload
 

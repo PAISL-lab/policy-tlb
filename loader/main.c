@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/resource.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <bpf/bpf.h>
@@ -21,6 +22,19 @@ static volatile sig_atomic_t reload_requested;
 
 struct runtime_ctx {
 	struct mcp_unix_socket_server *server;
+};
+
+struct cli_options {
+	const char *policy_dir;
+	unsigned int metrics_interval_sec;
+};
+
+struct metrics_snapshot {
+	struct mcp_metric_value slots[MCP_GUARD_METRIC_SLOTS];
+	__u64 total_count;
+	__u64 l1_count;
+	__u64 l2_count;
+	__u64 l3_count;
 };
 
 static const char *hook_name(__u32 hook_id)
@@ -101,23 +115,24 @@ static void decode_metric_index(__u32 index, __u32 *hook, __u32 *layer,
 	*action = index & 0x3;
 }
 
-static void print_metrics_summary(int metrics_fd)
+static int read_metrics_snapshot(int metrics_fd, struct metrics_snapshot *snapshot)
 {
 	int cpus = libbpf_num_possible_cpus();
 	size_t value_size;
 	struct mcp_metric_value *values;
 
 	if (metrics_fd < 0 || cpus <= 0)
-		return;
+		return -EINVAL;
+	if (!snapshot)
+		return -EINVAL;
 
 	value_size = sizeof(*values) * (size_t)cpus;
 	values = calloc(1, value_size);
 	if (!values)
-		return;
+		return -ENOMEM;
 
-	printf("metrics summary:\n");
+	memset(snapshot, 0, sizeof(*snapshot));
 	for (__u32 index = 0; index < MCP_GUARD_METRIC_SLOTS; index++) {
-		struct mcp_metric_value total = {};
 		__u32 hook;
 		__u32 layer;
 		__u32 action;
@@ -127,39 +142,118 @@ static void print_metrics_summary(int metrics_fd)
 
 		for (int cpu = 0; cpu < cpus; cpu++) {
 			struct mcp_metric_value *v = &values[cpu];
+			struct mcp_metric_value *total = &snapshot->slots[index];
 
-			total.count += v->count;
-			total.total_ns += v->total_ns;
-			if (v->min_ns && (!total.min_ns || v->min_ns < total.min_ns))
-				total.min_ns = v->min_ns;
-			if (v->max_ns > total.max_ns)
-				total.max_ns = v->max_ns;
+			total->count += v->count;
+			total->total_ns += v->total_ns;
+			if (v->min_ns && (!total->min_ns || v->min_ns < total->min_ns))
+				total->min_ns = v->min_ns;
+			if (v->max_ns > total->max_ns)
+				total->max_ns = v->max_ns;
 			for (__u32 b = 0; b < MCP_GUARD_HIST_BUCKETS; b++)
-				total.buckets[b] += v->buckets[b];
+				total->buckets[b] += v->buckets[b];
 		}
 
-		if (!total.count)
+		if (!snapshot->slots[index].count)
+			continue;
+
+		decode_metric_index(index, &hook, &layer, &action);
+		(void)hook;
+		(void)action;
+		snapshot->total_count += snapshot->slots[index].count;
+		if (layer == MCP_GUARD_LAYER_L1)
+			snapshot->l1_count += snapshot->slots[index].count;
+		else if (layer == MCP_GUARD_LAYER_L2)
+			snapshot->l2_count += snapshot->slots[index].count;
+		else if (layer == MCP_GUARD_LAYER_L3)
+			snapshot->l3_count += snapshot->slots[index].count;
+	}
+
+	free(values);
+	return 0;
+}
+
+static void print_metrics_details(const struct metrics_snapshot *snapshot)
+{
+	if (!snapshot)
+		return;
+
+	for (__u32 index = 0; index < MCP_GUARD_METRIC_SLOTS; index++) {
+		const struct mcp_metric_value *total = &snapshot->slots[index];
+		__u32 hook;
+		__u32 layer;
+		__u32 action;
+
+		if (!total->count)
 			continue;
 
 		decode_metric_index(index, &hook, &layer, &action);
 		printf("  hook=%s layer=%s action=%s count=%llu avg_ns=%llu "
 		       "min_ns=%llu max_ns=%llu buckets=[%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu]\n",
 		       hook_name(hook), layer_name(layer), action_name(action),
-		       (unsigned long long)total.count,
-		       (unsigned long long)(total.total_ns / total.count),
-		       (unsigned long long)total.min_ns,
-		       (unsigned long long)total.max_ns,
-		       (unsigned long long)total.buckets[0],
-		       (unsigned long long)total.buckets[1],
-		       (unsigned long long)total.buckets[2],
-		       (unsigned long long)total.buckets[3],
-		       (unsigned long long)total.buckets[4],
-		       (unsigned long long)total.buckets[5],
-		       (unsigned long long)total.buckets[6],
-		       (unsigned long long)total.buckets[7]);
+		       (unsigned long long)total->count,
+		       (unsigned long long)(total->total_ns / total->count),
+		       (unsigned long long)total->min_ns,
+		       (unsigned long long)total->max_ns,
+		       (unsigned long long)total->buckets[0],
+		       (unsigned long long)total->buckets[1],
+		       (unsigned long long)total->buckets[2],
+		       (unsigned long long)total->buckets[3],
+		       (unsigned long long)total->buckets[4],
+		       (unsigned long long)total->buckets[5],
+		       (unsigned long long)total->buckets[6],
+		       (unsigned long long)total->buckets[7]);
 	}
+}
 
-	free(values);
+static void print_metrics_ratios(const struct metrics_snapshot *snapshot)
+{
+	double l1 = 0.0;
+	double l2 = 0.0;
+	double l3 = 0.0;
+
+	if (!snapshot || !snapshot->total_count)
+		return;
+
+	l1 = (double)snapshot->l1_count / (double)snapshot->total_count;
+	l2 = (double)snapshot->l2_count / (double)snapshot->total_count;
+	l3 = (double)snapshot->l3_count / (double)snapshot->total_count;
+	printf("metrics ratios: total=%llu L1=%.6f L2=%.6f L3=%.6f\n",
+	       (unsigned long long)snapshot->total_count, l1, l2, l3);
+}
+
+static void print_metrics_summary(int metrics_fd)
+{
+	struct metrics_snapshot snapshot;
+
+	if (read_metrics_snapshot(metrics_fd, &snapshot) != 0)
+		return;
+
+	printf("metrics summary:\n");
+	print_metrics_ratios(&snapshot);
+	print_metrics_details(&snapshot);
+}
+
+static void publish_metrics_snapshot(int metrics_fd,
+				     struct mcp_unix_socket_server *server,
+				     int print_details)
+{
+	struct metrics_snapshot snapshot;
+
+	if (read_metrics_snapshot(metrics_fd, &snapshot) != 0)
+		return;
+
+	printf("metrics snapshot:\n");
+	print_metrics_ratios(&snapshot);
+	if (print_details)
+		print_metrics_details(&snapshot);
+
+	if (server)
+		mcp_unix_socket_server_publish_metrics(server,
+						       snapshot.total_count,
+						       snapshot.l1_count,
+						       snapshot.l2_count,
+						       snapshot.l3_count);
 }
 
 static void handle_signal(int signo)
@@ -180,6 +274,66 @@ static int bump_memlock_rlimit(void)
 	if (setrlimit(RLIMIT_MEMLOCK, &rlim) != 0)
 		return -errno;
 	return 0;
+}
+
+static int parse_interval_seconds(const char *value, unsigned int *out)
+{
+	char *end;
+	unsigned long seconds;
+
+	if (!value || !out)
+		return -EINVAL;
+
+	errno = 0;
+	seconds = strtoul(value, &end, 10);
+	if (errno || end == value || seconds > 86400)
+		return -EINVAL;
+	if (*end == 's')
+		end++;
+	if (*end)
+		return -EINVAL;
+
+	*out = (unsigned int)seconds;
+	return 0;
+}
+
+static int parse_args(int argc, char **argv, struct cli_options *options)
+{
+	if (!options)
+		return -EINVAL;
+
+	options->policy_dir = "policies";
+	options->metrics_interval_sec = 0;
+
+	for (int i = 1; i < argc; i++) {
+		if (strcmp(argv[i], "--metrics-interval") == 0) {
+			if (++i >= argc)
+				return -EINVAL;
+			if (parse_interval_seconds(argv[i],
+						   &options->metrics_interval_sec) != 0)
+				return -EINVAL;
+			continue;
+		}
+		if (strncmp(argv[i], "--metrics-interval=", 19) == 0) {
+			if (parse_interval_seconds(argv[i] + 19,
+						   &options->metrics_interval_sec) != 0)
+				return -EINVAL;
+			continue;
+		}
+		if (argv[i][0] == '-')
+			return -EINVAL;
+		options->policy_dir = argv[i];
+	}
+
+	return 0;
+}
+
+static __u64 monotonic_seconds(void)
+{
+	struct timespec ts = {};
+
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (__u64)ts.tv_sec;
 }
 
 static int print_event(void *ctx, const struct mcp_event *event)
@@ -243,17 +397,26 @@ static int load_policy_or_report(const char *policy_dir,
 
 int main(int argc, char **argv)
 {
-	const char *policy_dir = argc > 1 ? argv[1] : "policies";
+	struct cli_options options;
 	struct mcp_policy_load_result policy_result = {};
 	struct mcp_ringbuf_reader *reader = NULL;
 	struct runtime_ctx runtime = {};
 	struct mcp_bpf *guard = NULL;
+	__u64 next_metrics_ts = 0;
 	int err;
 
 	setvbuf(stdout, NULL, _IOLBF, 0);
 	signal(SIGINT, handle_signal);
 	signal(SIGTERM, handle_signal);
 	signal(SIGHUP, handle_signal);
+
+	err = parse_args(argc, argv, &options);
+	if (err) {
+		fprintf(stderr,
+			"usage: %s [policy_dir] [--metrics-interval seconds]\n",
+			argv[0]);
+		goto out;
+	}
 
 	err = bump_memlock_rlimit();
 	if (err)
@@ -264,7 +427,7 @@ int main(int argc, char **argv)
 	if (err)
 		goto out;
 
-	err = load_policy_or_report(policy_dir, guard, &policy_result);
+	err = load_policy_or_report(options.policy_dir, guard, &policy_result);
 	if (err)
 		goto out;
 
@@ -288,14 +451,25 @@ int main(int argc, char **argv)
 	}
 
 	printf("mcp-guard running; send SIGHUP to reload policy, Ctrl-C to stop\n");
+	if (options.metrics_interval_sec)
+		next_metrics_ts = monotonic_seconds() + options.metrics_interval_sec;
+
 	while (!stop_requested) {
 		if (reload_requested) {
 			reload_requested = 0;
-			load_policy_or_report(policy_dir, guard, &policy_result);
+			load_policy_or_report(options.policy_dir, guard, &policy_result);
 		}
 
 		if (runtime.server)
 			mcp_unix_socket_server_accept(runtime.server);
+
+		if (options.metrics_interval_sec &&
+		    monotonic_seconds() >= next_metrics_ts) {
+			publish_metrics_snapshot(mcp_bpf_map_fd(guard, MCP_BPF_MAP_METRICS),
+						 runtime.server, 0);
+			next_metrics_ts = monotonic_seconds() +
+					  options.metrics_interval_sec;
+		}
 
 		err = mcp_ringbuf_reader_poll(reader, 250);
 		if (err == -EINTR) {

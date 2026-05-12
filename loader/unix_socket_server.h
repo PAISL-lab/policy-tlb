@@ -12,6 +12,11 @@ int mcp_unix_socket_server_start(const char *path,
 void mcp_unix_socket_server_accept(struct mcp_unix_socket_server *server);
 void mcp_unix_socket_server_publish(struct mcp_unix_socket_server *server,
 				    const struct mcp_event *event);
+void mcp_unix_socket_server_publish_metrics(struct mcp_unix_socket_server *server,
+					    __u64 total_count,
+					    __u64 l1_count,
+					    __u64 l2_count,
+					    __u64 l3_count);
 void mcp_unix_socket_server_stop(struct mcp_unix_socket_server *server);
 
 #endif

@@ -310,6 +310,16 @@ The loader prints a metrics summary on shutdown. Ring buffer events remain the
 source for detailed deny/audit records, while the metrics map gives aggregate
 visibility even when individual allow events are not emitted.
 
+Periodic metrics snapshots can also be enabled:
+
+```bash
+sudo ./mcp-guard policies --metrics-interval 1s
+```
+
+When enabled, the loader prints `metrics snapshot` output and publishes
+newline-delimited JSON messages with `"type":"metrics_snapshot"` to
+`/tmp/mcp-guard.sock`.
+
 ## Policy Format
 
 Default policy:
@@ -490,6 +500,7 @@ sudo ./tests/test_policy_update.sh
 sudo ./tests/test_l1_cache.sh
 sudo ./tests/test_path_lpm_trie.sh
 sudo ./tests/test_l2_flags_cache.sh
+sudo ./tests/test_metrics_snapshot.sh
 ```
 
 The tests verify:
@@ -501,6 +512,7 @@ The tests verify:
 - L1 cache hits after repeated access from the same process
 - LPM trie path-prefix deny and longest-prefix allow behavior
 - L2 safe-resource hits and policy flag validation
+- periodic metrics snapshots and GUI-facing metrics JSON
 
 Sample output:
 

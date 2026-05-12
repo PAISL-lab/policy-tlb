@@ -257,9 +257,9 @@ Keep color as a secondary signal; the table text must remain readable.
    - Add `--demo gui/samples/events.ndjson` option.
    - Let GUI work continue without root, BPF, or loader access.
 
-7. Prepare for metrics messages.
+7. Route metrics messages.
    - Display shutdown-summary-derived event counters initially.
-   - When loader adds periodic `metrics_snapshot`, route it to `MetricsView`.
+   - Route loader `metrics_snapshot` messages to `MetricsView`.
    - Ignore unknown message types safely.
 
 ## Test Plan
@@ -291,7 +291,7 @@ Expected behavior:
 
 - Events update live when deny/audit records arrive.
 - L1/L2/L3 counters update from event-derived data.
-- Once loader emits `metrics_snapshot`, Metrics tab updates without requiring GUI restart.
+- Loader `metrics_snapshot` messages update the Metrics tab without requiring GUI restart.
 
 Manual no-loader test:
 
