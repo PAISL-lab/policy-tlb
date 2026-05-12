@@ -93,7 +93,7 @@ scoping, improving observability transport, and benchmark/report support.
 | 2. LPM_TRIE path policy | Complete for current PoC: path prefixes are normalized, loaded into LPM trie, and covered by runtime tests | `policy_loader.c`, `bpf_loader.c` |
 | 3. L2 flag/cache strengthening | Complete for current PoC: separated config/rule flags, startup summary, unknown flag rejection, and runtime L2 test | `policy_loader.c`, `main.c` |
 | 4. metrics/histogram map | Complete for current PoC: shutdown summary, periodic snapshots, layer ratios, and GUI metrics JSON | `bpf_loader.c`, `main.c`, `unix_socket_server.c` |
-| 5. atomic policy reload | Validation-before-write ordering implemented; full shadow generation remains | `policy_loader.c`, `main.c` |
+| 5. atomic policy reload | Complete for current PoC: validation, map snapshot/rollback, generation bump, and reload_result JSON | `policy_loader.c`, `main.c` |
 | 6. MCP agent scoping | Parse agent profiles and bind policy scopes to pid/tgid/cgroup/comm | `policy_loader.c`, `main.c` |
 | 7. GUI | Stabilize socket schema and add health/reload/metrics messages | `unix_socket_server.c`, `main.c` |
 | 8. benchmark/report | Add benchmark mode and write CSV/JSON reports | `main.c`, new `report_writer.c` |
@@ -195,29 +195,33 @@ Acceptance:
 
 ### 4. Atomic Policy Reload
 
-The current reload path parses policy files into memory first, writes BPF maps
-after successful parsing, and increments `global_epoch` last. This avoids the
-old clear-before-validate behavior, but it is not yet a full shadow-generation
-swap.
+The reload path parses policy files into memory first, snapshots the active BPF
+maps, writes the new policy state, and increments `global_epoch` last. If a map
+write fails before the epoch flip, the loader restores the previous policy maps.
 
 Implemented:
 
 - Parse every policy file into memory first.
 - Build the complete policy state before touching BPF maps.
+- Validate the complete policy set before map writes.
+- Snapshot active policy rules, config, and path trie entries.
+- Roll back active maps if a reload write fails before epoch bump.
+- Track `active_generation` in policy config.
 - Increment `global_epoch` only after policy maps/config are updated.
+- Publish `"type":"reload_result"` JSON over the GUI socket.
+- `tests/test_atomic_reload.sh` coverage.
 
 Remaining:
 
-- Validate the complete policy set more strictly before touching BPF maps.
-- Add an active generation field to policy config when the BPF side supports it.
-- Load new data into inactive generation maps or shadow slots.
-- Flip the active generation last.
-- On failure, leave the existing policy and epoch unchanged.
+- A true inactive-generation map swap would require duplicated BPF maps or
+  generation-aware lookups in BPF. Current PoC uses snapshot/rollback around the
+  existing maps.
 
 Acceptance:
 
 - Corrupting one policy file and sending `SIGHUP` keeps the previous policy
   active.
+- Failed reload keeps the previous epoch.
 - Reload result is published as JSON:
   - `"type":"reload_result"`
   - `success`

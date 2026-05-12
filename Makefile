@@ -58,6 +58,7 @@ test: $(TARGET)
 	./tests/test_path_lpm_trie.sh
 	./tests/test_l2_flags_cache.sh
 	./tests/test_metrics_snapshot.sh
+	./tests/test_atomic_reload.sh
 
 unload:
 	sudo pkill -INT -x $(TARGET) || true

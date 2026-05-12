@@ -291,9 +291,11 @@ Policy reload does not scan and delete every cache entry. Instead:
 This makes global invalidation O(1), which is the core lock-free epoch idea from
 the paper.
 
-Current reload is atomic at the validation/order level: a malformed policy file
-is rejected before map writes begin. Full shadow-generation policy swapping is
-still future work.
+Reload is atomic for the current PoC map layout: the loader parses and validates
+the new policy first, snapshots active maps, writes the new map state, and flips
+the visible generation plus epoch last. If a reload fails before the epoch bump,
+the loader restores the previous rules, config, and path trie entries and emits
+a `reload_result` JSON message.
 
 ## Metrics
 
@@ -458,7 +460,7 @@ sudo ./mcp-guard policies
 Expected startup:
 
 ```text
-loaded 7 policy rules, epoch=1
+loaded 7 policy rules, generation=1 epoch=1
 policy flags: skip_dir_read=1 cache_file_followups=1 deny_tailcall_fail=1 skip_l2_safe=0
 event socket listening at /tmp/mcp-guard.sock
 mcp-guard running; send SIGHUP to reload policy, Ctrl-C to stop
@@ -501,6 +503,7 @@ sudo ./tests/test_l1_cache.sh
 sudo ./tests/test_path_lpm_trie.sh
 sudo ./tests/test_l2_flags_cache.sh
 sudo ./tests/test_metrics_snapshot.sh
+sudo ./tests/test_atomic_reload.sh
 ```
 
 The tests verify:
@@ -513,6 +516,7 @@ The tests verify:
 - LPM trie path-prefix deny and longest-prefix allow behavior
 - L2 safe-resource hits and policy flag validation
 - periodic metrics snapshots and GUI-facing metrics JSON
+- failed reload rollback with unchanged active policy and epoch
 
 Sample output:
 

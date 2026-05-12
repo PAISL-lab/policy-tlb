@@ -373,7 +373,8 @@ static int print_event(void *ctx, const struct mcp_event *event)
 
 static int load_policy_or_report(const char *policy_dir,
 				 struct mcp_bpf *guard,
-				 struct mcp_policy_load_result *result)
+				 struct mcp_policy_load_result *result,
+				 struct mcp_unix_socket_server *server)
 {
 	int err;
 
@@ -386,12 +387,24 @@ static int load_policy_or_report(const char *policy_dir,
 	if (err) {
 		fprintf(stderr, "failed to load policies from %s: %s\n",
 			policy_dir, strerror(-err));
+		if (server)
+			mcp_unix_socket_server_publish_reload(server, 0,
+							     result->rule_count,
+							     result->active_generation,
+							     result->epoch,
+							     strerror(-err));
 		return err;
 	}
 
-	printf("loaded %u policy rules, epoch=%llu\n", result->rule_count,
+	printf("loaded %u policy rules, generation=%u epoch=%llu\n",
+	       result->rule_count, result->active_generation,
 	       (unsigned long long)result->epoch);
 	print_policy_flags(result->flags);
+	if (server)
+		mcp_unix_socket_server_publish_reload(server, 1,
+						     result->rule_count,
+						     result->active_generation,
+						     result->epoch, "");
 	return 0;
 }
 
@@ -427,7 +440,7 @@ int main(int argc, char **argv)
 	if (err)
 		goto out;
 
-	err = load_policy_or_report(options.policy_dir, guard, &policy_result);
+	err = load_policy_or_report(options.policy_dir, guard, &policy_result, NULL);
 	if (err)
 		goto out;
 
@@ -457,7 +470,8 @@ int main(int argc, char **argv)
 	while (!stop_requested) {
 		if (reload_requested) {
 			reload_requested = 0;
-			load_policy_or_report(options.policy_dir, guard, &policy_result);
+			load_policy_or_report(options.policy_dir, guard,
+					      &policy_result, runtime.server);
 		}
 
 		if (runtime.server)

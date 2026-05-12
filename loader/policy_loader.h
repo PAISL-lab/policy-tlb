@@ -6,6 +6,7 @@
 struct mcp_policy_load_result {
 	__u32 rule_count;
 	__u32 flags;
+	__u32 active_generation;
 	__u64 epoch;
 };
 

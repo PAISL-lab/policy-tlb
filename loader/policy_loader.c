@@ -17,6 +17,19 @@ struct policy_load_state {
 	__u32 next_index;
 };
 
+struct path_policy_entry {
+	struct mcp_path_lpm_key key;
+	struct mcp_path_policy_value value;
+};
+
+struct policy_map_snapshot {
+	struct mcp_policy_rule rules[MCP_GUARD_MAX_RULES];
+	struct mcp_policy_config config;
+	struct path_policy_entry path_entries[MCP_GUARD_MAX_RULES];
+	__u32 path_entry_count;
+	int have_config;
+};
+
 struct flag_spec {
 	const char *name;
 	__u32 value;
@@ -459,6 +472,87 @@ static int write_rules(int rules_fd, const struct policy_load_state *state)
 	return 0;
 }
 
+static int snapshot_rules(int rules_fd, struct policy_map_snapshot *snapshot)
+{
+	if (rules_fd < 0 || !snapshot)
+		return -EINVAL;
+
+	for (__u32 i = 0; i < MCP_GUARD_MAX_RULES; i++) {
+		struct mcp_policy_rule rule = {};
+
+		if (bpf_map_lookup_elem(rules_fd, &i, &rule) != 0)
+			memset(&rule, 0, sizeof(rule));
+		snapshot->rules[i] = rule;
+	}
+	return 0;
+}
+
+static int snapshot_config(int config_fd, struct policy_map_snapshot *snapshot)
+{
+	__u32 key = MCP_GUARD_CONFIG_KEY;
+
+	if (config_fd < 0 || !snapshot)
+		return -EINVAL;
+
+	if (bpf_map_lookup_elem(config_fd, &key, &snapshot->config) == 0) {
+		snapshot->have_config = 1;
+		return 0;
+	}
+
+	memset(&snapshot->config, 0, sizeof(snapshot->config));
+	snapshot->have_config = 0;
+	return 0;
+}
+
+static int snapshot_path_trie(int path_trie_fd, struct policy_map_snapshot *snapshot)
+{
+	struct mcp_path_lpm_key key = {};
+	struct mcp_path_lpm_key next_key = {};
+	int have_key = 0;
+
+	if (path_trie_fd < 0 || !snapshot)
+		return 0;
+
+	snapshot->path_entry_count = 0;
+	while (bpf_map_get_next_key(path_trie_fd, have_key ? &key : NULL,
+				    &next_key) == 0) {
+		struct path_policy_entry *entry;
+
+		if (snapshot->path_entry_count >= MCP_GUARD_MAX_RULES)
+			return -ENOSPC;
+
+		entry = &snapshot->path_entries[snapshot->path_entry_count];
+		entry->key = next_key;
+		if (bpf_map_lookup_elem(path_trie_fd, &entry->key,
+					&entry->value) != 0)
+			return -errno;
+
+		snapshot->path_entry_count++;
+		key = next_key;
+		have_key = 1;
+	}
+
+	return 0;
+}
+
+static int snapshot_policy_maps(int rules_fd, int path_trie_fd, int config_fd,
+				struct policy_map_snapshot *snapshot)
+{
+	int err;
+
+	if (!snapshot)
+		return -EINVAL;
+	memset(snapshot, 0, sizeof(*snapshot));
+
+	err = snapshot_rules(rules_fd, snapshot);
+	if (err)
+		return err;
+	err = snapshot_config(config_fd, snapshot);
+	if (err)
+		return err;
+	return snapshot_path_trie(path_trie_fd, snapshot);
+}
+
 static int clear_path_trie(int path_trie_fd)
 {
 	struct mcp_path_lpm_key key = {};
@@ -510,6 +604,57 @@ static int write_path_trie(int path_trie_fd, const struct policy_load_state *sta
 	return 0;
 }
 
+static int restore_path_trie(int path_trie_fd,
+			     const struct policy_map_snapshot *snapshot)
+{
+	int err;
+
+	if (path_trie_fd < 0 || !snapshot)
+		return 0;
+
+	err = clear_path_trie(path_trie_fd);
+	if (err)
+		return err;
+
+	for (__u32 i = 0; i < snapshot->path_entry_count; i++) {
+		const struct path_policy_entry *entry = &snapshot->path_entries[i];
+
+		if (bpf_map_update_elem(path_trie_fd, &entry->key,
+					&entry->value, BPF_ANY) != 0)
+			return -errno;
+	}
+
+	return 0;
+}
+
+static int restore_policy_maps(int rules_fd, int path_trie_fd, int config_fd,
+			       const struct policy_map_snapshot *snapshot)
+{
+	__u32 key = MCP_GUARD_CONFIG_KEY;
+	int first_err = 0;
+	int err;
+
+	if (!snapshot)
+		return -EINVAL;
+
+	for (__u32 i = 0; i < MCP_GUARD_MAX_RULES; i++) {
+		if (bpf_map_update_elem(rules_fd, &i, &snapshot->rules[i],
+					BPF_ANY) != 0 && !first_err)
+			first_err = -errno;
+	}
+
+	err = restore_path_trie(path_trie_fd, snapshot);
+	if (err && !first_err)
+		first_err = err;
+
+	if (snapshot->have_config &&
+	    bpf_map_update_elem(config_fd, &key, &snapshot->config, BPF_ANY) != 0 &&
+	    !first_err)
+		first_err = -errno;
+
+	return first_err;
+}
+
 static int bump_epoch(int epoch_fd, __u64 *new_epoch)
 {
 	__u32 key = MCP_GUARD_EPOCH_KEY;
@@ -525,6 +670,39 @@ static int bump_epoch(int epoch_fd, __u64 *new_epoch)
 
 	if (new_epoch)
 		*new_epoch = epoch;
+	return 0;
+}
+
+static int validate_policy_state(const struct policy_load_state *state,
+				 const struct mcp_policy_config *config)
+{
+	if (!state || !config)
+		return -EINVAL;
+	if (state->next_index > MCP_GUARD_MAX_RULES)
+		return -EINVAL;
+	if (config->rule_count != state->next_index)
+		return -EINVAL;
+
+	for (__u32 i = 0; i < state->next_index; i++) {
+		const struct mcp_policy_rule *rule = &state->rules[i];
+
+		if (!rule->enabled)
+			return -EINVAL;
+		if (!rule->rule_id || rule->rule_id > MCP_GUARD_MAX_RULES)
+			return -EINVAL;
+		if (rule->action != MCP_GUARD_ACTION_ALLOW &&
+		    rule->action != MCP_GUARD_ACTION_DENY &&
+		    rule->action != MCP_GUARD_ACTION_AUDIT)
+			return -EINVAL;
+		if (!rule->hook_mask)
+			return -EINVAL;
+		if (!rule->value_len || rule->value_len >= MCP_GUARD_RULE_VALUE_LEN)
+			return -EINVAL;
+		if (rule->rule_type == MCP_GUARD_RULE_PATH_PREFIX &&
+		    rule->value[0] != '/')
+			return -EINVAL;
+	}
+
 	return 0;
 }
 
@@ -557,6 +735,7 @@ int mcp_policy_load_dir(const char *policy_dir,
 	char path[PATH_MAX];
 	__u32 key = MCP_GUARD_CONFIG_KEY;
 	__u64 epoch = 0;
+	struct policy_map_snapshot snapshot = {};
 	int err;
 
 	if (!policy_dir || rules_fd < 0 || config_fd < 0 || epoch_fd < 0)
@@ -591,26 +770,51 @@ int mcp_policy_load_dir(const char *policy_dir,
 		return err;
 
 	config.rule_count = state.next_index;
+	config.active_generation = 1;
+
+	err = snapshot_policy_maps(rules_fd, path_trie_fd, config_fd, &snapshot);
+	if (err)
+		return err;
+	if (snapshot.have_config)
+		config.active_generation = snapshot.config.active_generation + 1;
+	if (!config.active_generation)
+		config.active_generation = 1;
+
+	err = validate_policy_state(&state, &config);
+	if (err)
+		return err;
 
 	err = clear_path_trie(path_trie_fd);
-	if (err)
+	if (err) {
+		restore_policy_maps(rules_fd, path_trie_fd, config_fd, &snapshot);
 		return err;
+	}
 	err = write_path_trie(path_trie_fd, &state);
-	if (err)
+	if (err) {
+		restore_policy_maps(rules_fd, path_trie_fd, config_fd, &snapshot);
 		return err;
+	}
 	err = write_rules(rules_fd, &state);
-	if (err)
+	if (err) {
+		restore_policy_maps(rules_fd, path_trie_fd, config_fd, &snapshot);
 		return err;
-	if (bpf_map_update_elem(config_fd, &key, &config, BPF_ANY) != 0)
-		return -errno;
+	}
+	if (bpf_map_update_elem(config_fd, &key, &config, BPF_ANY) != 0) {
+		err = -errno;
+		restore_policy_maps(rules_fd, path_trie_fd, config_fd, &snapshot);
+		return err;
+	}
 
 	err = bump_epoch(epoch_fd, &epoch);
-	if (err)
+	if (err) {
+		restore_policy_maps(rules_fd, path_trie_fd, config_fd, &snapshot);
 		return err;
+	}
 
 	if (result) {
 		result->rule_count = state.next_index;
 		result->flags = config.flags;
+		result->active_generation = config.active_generation;
 		result->epoch = epoch;
 	}
 

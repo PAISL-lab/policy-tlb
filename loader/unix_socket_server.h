@@ -17,6 +17,12 @@ void mcp_unix_socket_server_publish_metrics(struct mcp_unix_socket_server *serve
 					    __u64 l1_count,
 					    __u64 l2_count,
 					    __u64 l3_count);
+void mcp_unix_socket_server_publish_reload(struct mcp_unix_socket_server *server,
+					   int success,
+					   __u32 rule_count,
+					   __u32 active_generation,
+					   __u64 epoch,
+					   const char *error);
 void mcp_unix_socket_server_stop(struct mcp_unix_socket_server *server);
 
 #endif

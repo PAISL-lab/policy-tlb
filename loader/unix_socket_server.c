@@ -233,6 +233,32 @@ void mcp_unix_socket_server_publish_metrics(struct mcp_unix_socket_server *serve
 	publish_line(server, line, (size_t)len);
 }
 
+void mcp_unix_socket_server_publish_reload(struct mcp_unix_socket_server *server,
+					   int success,
+					   __u32 rule_count,
+					   __u32 active_generation,
+					   __u64 epoch,
+					   const char *error)
+{
+	char line[512];
+	int len;
+
+	if (!server)
+		return;
+
+	len = snprintf(line, sizeof(line),
+		       "{\"type\":\"reload_result\",\"success\":%s,"
+		       "\"rule_count\":%u,\"active_generation\":%u,"
+		       "\"epoch\":%llu,\"error\":\"%s\"}\n",
+		       success ? "true" : "false", rule_count,
+		       active_generation, (unsigned long long)epoch,
+		       error ? error : "");
+	if (len <= 0)
+		return;
+
+	publish_line(server, line, (size_t)len);
+}
+
 void mcp_unix_socket_server_stop(struct mcp_unix_socket_server *server)
 {
 	if (!server)
