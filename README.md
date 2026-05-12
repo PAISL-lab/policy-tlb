@@ -86,12 +86,17 @@ The current PoC implements:
   - `file_permission`
   - `socket_connect`
 - L1 decision cache using a BPF LRU per-CPU hash map.
+- Physical L1 -> L2 -> L3 separation using per-hook BPF tail-call
+  `PROG_ARRAY` maps.
+- Per-CPU tail-call state and scratch buffers to keep the BPF stack within
+  verifier limits.
 - Global epoch invalidation using a BPF array map.
 - Policy rule map and config map.
 - Ring buffer event delivery to user space.
 - User-space loader using libbpf skeletons.
 - Unix socket event publishing at `/tmp/mcp-guard.sock`.
-- Deny tests for exec, file access, socket connect, and policy reload.
+- Deny tests for exec, file access, socket connect, policy reload, and L1 cache
+  hits.
 - Timing instrumentation with `layer`, `duration_ns`, `duration_us`,
   `model_us`, and `delta_us`.
 
@@ -99,11 +104,11 @@ The current PoC implements:
 
 ```text
 bpf/
-  mcp_guard.bpf.c          BPF LSM hook entrypoints
+  mcp_guard.bpf.c          BPF LSM hook entrypoints and tail-call chain
   l1_fast_path.bpf.c       L1 cache lookup/store and resource id helpers
   l2_semi_fast_path.bpf.c  Cheap resource class checks
   l3_slow_path.bpf.c       Policy matching and ring buffer event emission
-  maps.bpf.h               BPF map definitions
+  maps.bpf.h               BPF maps, tail-call program arrays, scratch state
   vmlinux.h                CO-RE kernel type header
 
 include/
@@ -114,7 +119,7 @@ include/
 
 loader/
   main.c                   Loader lifecycle, signals, stdout events
-  bpf_loader.c             libbpf skeleton load/attach wrapper
+  bpf_loader.c             libbpf load/attach and tail-call map setup
   policy_loader.c          JSON policy loader and epoch bump
   ringbuf_reader.c         BPF ring buffer polling
   unix_socket_server.c     GUI-facing Unix socket publisher
@@ -131,6 +136,7 @@ tests/
   test_file_access.sh
   test_socket_connect.sh
   test_policy_update.sh
+  test_l1_cache.sh
 
 docs/
   loader-development-guide*.md
@@ -157,7 +163,7 @@ docs/
        v                                |
   allow / deny                          |
                                         |
-       miss                             |
+       miss (tail call)                 |
        v                                |
   L2 Semi-Fast Path                     |
   cheap safe-resource checks            |
@@ -165,7 +171,7 @@ docs/
        v                                |
   allow + cache                         |
                                         |
-       miss                             |
+       miss (tail call)                 |
        v                                |
   L3 Slow Path                          |
   policy map scan, path/socket/exec     |
@@ -184,6 +190,46 @@ docs/
 ```
 
 ## Decision Pipeline
+
+The implementation now uses physical tail-call separation. Each BPF LSM hook
+starts in an attached L1 program. On an L1 miss, it jumps through a per-hook
+`BPF_MAP_TYPE_PROG_ARRAY` to the matching L2 program. If L2 cannot make a cheap
+decision, it tail-calls the matching L3 slow-path program.
+
+```text
+attached LSM program
+  L1 cache lookup
+    hit  -> return allow/deny/audit
+    miss -> bpf_tail_call(..., L2)
+
+tail-call target
+  L2 cheap decision
+    hit  -> cache + return
+    miss -> bpf_tail_call(..., L3)
+
+tail-call target
+  L3 policy scan
+    -> cache + emit event when needed + return
+```
+
+Tail-call program arrays:
+
+| Hook | Program Array | Index 0 | Index 1 |
+|---|---|---|---|
+| `bprm_check_security` | `exec_pipeline` | exec L2 | exec L3 |
+| `file_open` | `file_open_pipeline` | file-open L2 | file-open L3 |
+| `file_permission` | `file_permission_pipeline` | file-permission L2 | file-permission L3 |
+| `socket_connect` | `socket_connect_pipeline` | socket L2 | socket L3 |
+
+Only the L1 programs are attached to LSM hooks. The loader disables auto-attach
+for internal L2/L3 programs, loads them with the skeleton, and writes their
+program fds into the relevant `PROG_ARRAY` entries. If an expected tail call
+cannot run, the hook returns `-EACCES` to fail closed.
+
+Because BPF tail calls do not preserve stack state in a normal C-call style, the
+pipeline stores cross-layer timing metadata in a per-CPU `tail_state` map.
+Large temporary buffers such as path and rule-name strings live in a per-CPU
+`scratch` map so the BPF verifier stack limit stays satisfied.
 
 ### L1 Fast Path
 

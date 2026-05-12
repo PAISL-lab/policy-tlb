@@ -20,6 +20,66 @@ static __always_inline int mcp_action_ret(__u32 action)
 	return 0;
 }
 
+static __always_inline int mcp_tail_fail_ret(void)
+{
+	return -MCP_GUARD_DENY_ERRNO;
+}
+
+static __always_inline void mcp_set_tail_start(__u64 start_ns)
+{
+	__u32 key = 0;
+	struct mcp_tail_state *state;
+
+	state = bpf_map_lookup_elem(&tail_state, &key);
+	if (state)
+		state->start_ns = start_ns;
+}
+
+static __always_inline __u64 mcp_get_tail_start(void)
+{
+	__u32 key = 0;
+	struct mcp_tail_state *state;
+
+	state = bpf_map_lookup_elem(&tail_state, &key);
+	if (!state || !state->start_ns)
+		return bpf_ktime_get_ns();
+	return state->start_ns;
+}
+
+static __always_inline struct mcp_scratch *mcp_get_scratch(void)
+{
+	__u32 key = 0;
+
+	return bpf_map_lookup_elem(&scratch, &key);
+}
+
+static __always_inline void mcp_read_bprm_filename(struct linux_binprm *bprm,
+						    char *filename)
+{
+	const char *filename_ptr;
+
+	filename[0] = 0;
+	filename_ptr = BPF_CORE_READ(bprm, filename);
+	if (filename_ptr)
+		bpf_probe_read_kernel_str(filename, MCP_GUARD_PATH_LEN, filename_ptr);
+}
+
+static __always_inline __u64 mcp_bprm_resource_id(struct linux_binprm *bprm,
+						  const char *filename)
+{
+	struct file *file;
+	__u64 resource_id;
+
+	file = BPF_CORE_READ(bprm, file);
+	resource_id = mcp_file_resource_id(file);
+	if (resource_id)
+		return resource_id;
+
+	if (!filename)
+		return 0;
+	return mcp_fnv1a_hash(filename, MCP_GUARD_PATH_LEN);
+}
+
 static __always_inline int mcp_read_file_path(struct file *file, char *path)
 {
 	long ret;
@@ -36,6 +96,40 @@ static __always_inline int mcp_read_file_path(struct file *file, char *path)
 	}
 
 	return 0;
+}
+
+static __always_inline __u64 mcp_socket_resource_id(struct sockaddr *address,
+						    __u16 *family,
+						    __u32 *ipv4_addr,
+						    __u16 *port)
+{
+	struct sockaddr_in addr4 = {};
+	__u16 addr_family = 0;
+
+	if (family)
+		*family = 0;
+	if (ipv4_addr)
+		*ipv4_addr = 0;
+	if (port)
+		*port = 0;
+
+	if (!address)
+		return 0;
+
+	bpf_probe_read_kernel(&addr_family, sizeof(addr_family), &address->sa_family);
+	if (family)
+		*family = addr_family;
+
+	if (addr_family != MCP_GUARD_AF_INET)
+		return 0;
+
+	bpf_probe_read_kernel(&addr4, sizeof(addr4), address);
+	if (ipv4_addr)
+		*ipv4_addr = addr4.sin_addr.s_addr;
+	if (port)
+		*port = bpf_ntohs(addr4.sin_port);
+
+	return ((__u64)addr4.sin_addr.s_addr << 16) | bpf_ntohs(addr4.sin_port);
 }
 
 static __always_inline void mcp_cache_file_followups(__u64 resource_id,
@@ -55,26 +149,21 @@ static __always_inline void mcp_cache_file_followups(__u64 resource_id,
 SEC("lsm/bprm_check_security")
 int BPF_PROG(mcp_guard_bprm_check_security, struct linux_binprm *bprm, int ret)
 {
-	char filename[MCP_GUARD_PATH_LEN] = {};
-	char rule_name[MCP_GUARD_RULE_NAME_LEN] = {};
+	struct mcp_scratch *scratch = mcp_get_scratch();
 	struct mcp_cache_value cached = {};
 	struct mcp_cache_key key = {};
-	const char *filename_ptr;
 	__u64 resource_id;
 	__u64 start_ns = bpf_ktime_get_ns();
-	__u32 layer = MCP_GUARD_LAYER_L3;
-	__u32 rule_id = 0;
-	__u32 reason = MCP_GUARD_REASON_DEFAULT;
 	int action;
 
 	if (ret)
 		return ret;
+	if (!scratch)
+		return mcp_tail_fail_ret();
 
-	filename_ptr = BPF_CORE_READ(bprm, filename);
-	if (filename_ptr)
-		bpf_probe_read_kernel_str(filename, sizeof(filename), filename_ptr);
-
-	resource_id = mcp_fnv1a_hash(filename, sizeof(filename));
+	mcp_set_tail_start(start_ns);
+	mcp_read_bprm_filename(bprm, scratch->path);
+	resource_id = mcp_bprm_resource_id(bprm, scratch->path);
 	mcp_fill_cache_key(&key, MCP_GUARD_HOOK_EXEC, resource_id);
 
 	action = mcp_l1_lookup(&key, &cached);
@@ -83,27 +172,79 @@ int BPF_PROG(mcp_guard_bprm_check_security, struct linux_binprm *bprm, int ret)
 			mcp_emit_event(MCP_GUARD_HOOK_EXEC, action,
 				       MCP_GUARD_LAYER_L1,
 				       MCP_GUARD_REASON_L1_CACHE, cached.rule_id,
-				       resource_id, start_ns, filename, 0, 0, 0, 0,
+				       resource_id, start_ns, scratch->path, 0, 0, 0, 0,
 				       mcp_should_block(action) ? MCP_GUARD_DENY_ERRNO : 0);
 		return mcp_action_ret(action);
 	}
 
-	action = mcp_l2_exec_decide(filename);
+	bpf_tail_call(ctx, &exec_pipeline, MCP_GUARD_TAIL_L2);
+	return mcp_tail_fail_ret();
+}
+
+SEC("lsm/bprm_check_security")
+int BPF_PROG(mcp_guard_bprm_check_security_l2, struct linux_binprm *bprm, int ret)
+{
+	struct mcp_scratch *scratch = mcp_get_scratch();
+	struct mcp_cache_key key = {};
+	__u64 resource_id;
+	__u64 start_ns = mcp_get_tail_start();
+	int action;
+
+	if (ret)
+		return ret;
+	if (!scratch)
+		return mcp_tail_fail_ret();
+
+	mcp_read_bprm_filename(bprm, scratch->path);
+	resource_id = mcp_bprm_resource_id(bprm, scratch->path);
+
+	action = mcp_l2_exec_decide(scratch->path);
 	if (action == MCP_GUARD_ACTION_UNSET) {
-		action = mcp_l3_string_decide(MCP_GUARD_RULE_COMMAND_PREFIX,
-					      MCP_GUARD_HOOK_EXEC, filename, 0,
-					      &rule_id, rule_name);
-		reason = rule_id ? MCP_GUARD_REASON_POLICY : MCP_GUARD_REASON_DEFAULT;
-	} else {
-		layer = MCP_GUARD_LAYER_L2;
-		reason = MCP_GUARD_REASON_L2_SAFE;
+		bpf_tail_call(ctx, &exec_pipeline, MCP_GUARD_TAIL_L3);
+		return mcp_tail_fail_ret();
 	}
 
+	mcp_fill_cache_key(&key, MCP_GUARD_HOOK_EXEC, resource_id);
+	mcp_l1_store(&key, action, 0, 0, MCP_GUARD_REASON_L2_SAFE);
+	mcp_emit_event(MCP_GUARD_HOOK_EXEC, action, MCP_GUARD_LAYER_L2,
+		       MCP_GUARD_REASON_L2_SAFE, 0, resource_id, start_ns,
+		       scratch->path, 0, 0, 0, 0,
+		       mcp_should_block(action) ? MCP_GUARD_DENY_ERRNO : 0);
+
+	return mcp_action_ret(action);
+}
+
+SEC("lsm/bprm_check_security")
+int BPF_PROG(mcp_guard_bprm_check_security_l3, struct linux_binprm *bprm, int ret)
+{
+	struct mcp_scratch *scratch = mcp_get_scratch();
+	struct mcp_cache_key key = {};
+	__u64 resource_id;
+	__u64 start_ns = mcp_get_tail_start();
+	__u32 rule_id = 0;
+	__u32 reason;
+	int action;
+
+	if (ret)
+		return ret;
+	if (!scratch)
+		return mcp_tail_fail_ret();
+
+	scratch->rule_name[0] = 0;
+	mcp_read_bprm_filename(bprm, scratch->path);
+	resource_id = mcp_bprm_resource_id(bprm, scratch->path);
+	action = mcp_l3_string_decide(MCP_GUARD_RULE_COMMAND_PREFIX,
+				      MCP_GUARD_HOOK_EXEC, scratch->path, 0,
+				      &rule_id, scratch->rule_name);
+	reason = rule_id ? MCP_GUARD_REASON_POLICY : MCP_GUARD_REASON_DEFAULT;
+
+	mcp_fill_cache_key(&key, MCP_GUARD_HOOK_EXEC, resource_id);
 	mcp_l1_store(&key, action, 0, rule_id, reason);
 
 	if (action != MCP_GUARD_ACTION_ALLOW)
-		mcp_emit_event(MCP_GUARD_HOOK_EXEC, action, layer, reason, rule_id,
-			       resource_id, start_ns, filename, rule_name, 0, 0, 0,
+		mcp_emit_event(MCP_GUARD_HOOK_EXEC, action, MCP_GUARD_LAYER_L3,
+			       reason, rule_id, resource_id, start_ns,
+			       scratch->path, scratch->rule_name, 0, 0, 0,
 			       mcp_should_block(action) ? MCP_GUARD_DENY_ERRNO : 0);
 
 	return mcp_action_ret(action);
@@ -112,21 +253,16 @@ int BPF_PROG(mcp_guard_bprm_check_security, struct linux_binprm *bprm, int ret)
 SEC("lsm/file_open")
 int BPF_PROG(mcp_guard_file_open, struct file *file, int ret)
 {
-	char path[MCP_GUARD_PATH_LEN] = {};
-	char rule_name[MCP_GUARD_RULE_NAME_LEN] = {};
 	struct mcp_cache_value cached = {};
 	struct mcp_cache_key key = {};
 	__u64 resource_id = mcp_file_resource_id(file);
 	__u64 start_ns = bpf_ktime_get_ns();
-	__u32 layer = MCP_GUARD_LAYER_L3;
-	__u32 rule_id = 0;
-	__u32 flags = 0;
-	__u32 reason = MCP_GUARD_REASON_DEFAULT;
 	int action;
 
 	if (ret)
 		return ret;
 
+	mcp_set_tail_start(start_ns);
 	mcp_fill_cache_key(&key, MCP_GUARD_HOOK_FILE_OPEN, resource_id);
 	action = mcp_l1_lookup(&key, &cached);
 	if (action != MCP_GUARD_ACTION_UNSET) {
@@ -139,24 +275,65 @@ int BPF_PROG(mcp_guard_file_open, struct file *file, int ret)
 		return mcp_action_ret(action);
 	}
 
+	bpf_tail_call(ctx, &file_open_pipeline, MCP_GUARD_TAIL_L2);
+	return mcp_tail_fail_ret();
+}
+
+SEC("lsm/file_open")
+int BPF_PROG(mcp_guard_file_open_l2, struct file *file, int ret)
+{
+	struct mcp_cache_key key = {};
+	__u64 resource_id = mcp_file_resource_id(file);
+	__u32 flags = 0;
+	int action;
+
+	if (ret)
+		return ret;
+
 	action = mcp_l2_file_decide(file, MCP_GUARD_HOOK_FILE_OPEN, &flags);
 	if (action == MCP_GUARD_ACTION_UNSET) {
-		mcp_read_file_path(file, path);
-		action = mcp_l3_string_decide(MCP_GUARD_RULE_PATH_PREFIX,
-					      MCP_GUARD_HOOK_FILE_OPEN, path, resource_id,
-					      &rule_id, rule_name);
-		reason = rule_id ? MCP_GUARD_REASON_POLICY : MCP_GUARD_REASON_DEFAULT;
-	} else {
-		layer = MCP_GUARD_LAYER_L2;
-		reason = MCP_GUARD_REASON_L2_SAFE;
+		bpf_tail_call(ctx, &file_open_pipeline, MCP_GUARD_TAIL_L3);
+		return mcp_tail_fail_ret();
 	}
 
-	mcp_l1_store(&key, action, flags, rule_id, reason);
+	mcp_fill_cache_key(&key, MCP_GUARD_HOOK_FILE_OPEN, resource_id);
+	mcp_l1_store(&key, action, flags, 0, MCP_GUARD_REASON_L2_SAFE);
+	mcp_cache_file_followups(resource_id, action, 0, MCP_GUARD_REASON_L2_SAFE);
+	return mcp_action_ret(action);
+}
+
+SEC("lsm/file_open")
+int BPF_PROG(mcp_guard_file_open_l3, struct file *file, int ret)
+{
+	struct mcp_scratch *scratch = mcp_get_scratch();
+	struct mcp_cache_key key = {};
+	__u64 resource_id = mcp_file_resource_id(file);
+	__u64 start_ns = mcp_get_tail_start();
+	__u32 rule_id = 0;
+	__u32 reason;
+	int action;
+
+	if (ret)
+		return ret;
+	if (!scratch)
+		return mcp_tail_fail_ret();
+
+	scratch->rule_name[0] = 0;
+	mcp_read_file_path(file, scratch->path);
+	action = mcp_l3_string_decide(MCP_GUARD_RULE_PATH_PREFIX,
+				      MCP_GUARD_HOOK_FILE_OPEN,
+				      scratch->path, resource_id, &rule_id,
+				      scratch->rule_name);
+	reason = rule_id ? MCP_GUARD_REASON_POLICY : MCP_GUARD_REASON_DEFAULT;
+
+	mcp_fill_cache_key(&key, MCP_GUARD_HOOK_FILE_OPEN, resource_id);
+	mcp_l1_store(&key, action, 0, rule_id, reason);
 	mcp_cache_file_followups(resource_id, action, rule_id, reason);
 
 	if (action != MCP_GUARD_ACTION_ALLOW)
-		mcp_emit_event(MCP_GUARD_HOOK_FILE_OPEN, action, layer, reason, rule_id,
-			       resource_id, start_ns, path, rule_name, 0, 0, 0,
+		mcp_emit_event(MCP_GUARD_HOOK_FILE_OPEN, action, MCP_GUARD_LAYER_L3,
+			       reason, rule_id, resource_id, start_ns,
+			       scratch->path, scratch->rule_name, 0, 0, 0,
 			       mcp_should_block(action) ? MCP_GUARD_DENY_ERRNO : 0);
 
 	return mcp_action_ret(action);
@@ -165,21 +342,17 @@ int BPF_PROG(mcp_guard_file_open, struct file *file, int ret)
 SEC("lsm/file_permission")
 int BPF_PROG(mcp_guard_file_permission, struct file *file, int mask, int ret)
 {
-	char rule_name[MCP_GUARD_RULE_NAME_LEN] = {};
 	struct mcp_cache_value cached = {};
 	struct mcp_cache_key key = {};
 	__u64 resource_id = mcp_file_resource_id(file);
 	__u64 start_ns = bpf_ktime_get_ns();
 	__u32 hook_id = MCP_GUARD_HOOK_FILE_READ;
-	__u32 layer = MCP_GUARD_LAYER_L3;
-	__u32 rule_id = 0;
-	__u32 flags = 0;
-	__u32 reason = MCP_GUARD_REASON_DEFAULT;
 	int action;
 
 	if (ret)
 		return ret;
 
+	mcp_set_tail_start(start_ns);
 	if (mask & (MCP_GUARD_MAY_WRITE | MCP_GUARD_MAY_APPEND))
 		hook_id = MCP_GUARD_HOOK_FILE_WRITE;
 
@@ -194,22 +367,69 @@ int BPF_PROG(mcp_guard_file_permission, struct file *file, int mask, int ret)
 		return mcp_action_ret(action);
 	}
 
+	bpf_tail_call(ctx, &file_permission_pipeline, MCP_GUARD_TAIL_L2);
+	return mcp_tail_fail_ret();
+}
+
+SEC("lsm/file_permission")
+int BPF_PROG(mcp_guard_file_permission_l2, struct file *file, int mask, int ret)
+{
+	struct mcp_cache_key key = {};
+	__u64 resource_id = mcp_file_resource_id(file);
+	__u32 hook_id = MCP_GUARD_HOOK_FILE_READ;
+	__u32 flags = 0;
+	int action;
+
+	if (ret)
+		return ret;
+
+	if (mask & (MCP_GUARD_MAY_WRITE | MCP_GUARD_MAY_APPEND))
+		hook_id = MCP_GUARD_HOOK_FILE_WRITE;
+
 	action = mcp_l2_file_decide(file, hook_id, &flags);
 	if (action == MCP_GUARD_ACTION_UNSET) {
-		action = mcp_l3_resource_decide(MCP_GUARD_RULE_PATH_PREFIX,
-						hook_id, resource_id,
-						&rule_id, rule_name);
-		reason = rule_id ? MCP_GUARD_REASON_POLICY : MCP_GUARD_REASON_DEFAULT;
-	} else {
-		layer = MCP_GUARD_LAYER_L2;
-		reason = MCP_GUARD_REASON_L2_SAFE;
+		bpf_tail_call(ctx, &file_permission_pipeline, MCP_GUARD_TAIL_L3);
+		return mcp_tail_fail_ret();
 	}
 
-	mcp_l1_store(&key, action, flags, rule_id, reason);
+	mcp_fill_cache_key(&key, hook_id, resource_id);
+	mcp_l1_store(&key, action, flags, 0, MCP_GUARD_REASON_L2_SAFE);
+	return mcp_action_ret(action);
+}
+
+SEC("lsm/file_permission")
+int BPF_PROG(mcp_guard_file_permission_l3, struct file *file, int mask, int ret)
+{
+	struct mcp_scratch *scratch = mcp_get_scratch();
+	struct mcp_cache_key key = {};
+	__u64 resource_id = mcp_file_resource_id(file);
+	__u64 start_ns = mcp_get_tail_start();
+	__u32 hook_id = MCP_GUARD_HOOK_FILE_READ;
+	__u32 rule_id = 0;
+	__u32 reason;
+	int action;
+
+	if (ret)
+		return ret;
+	if (!scratch)
+		return mcp_tail_fail_ret();
+
+	if (mask & (MCP_GUARD_MAY_WRITE | MCP_GUARD_MAY_APPEND))
+		hook_id = MCP_GUARD_HOOK_FILE_WRITE;
+
+	scratch->rule_name[0] = 0;
+	action = mcp_l3_resource_decide(MCP_GUARD_RULE_PATH_PREFIX,
+					hook_id, resource_id, &rule_id,
+					scratch->rule_name);
+	reason = rule_id ? MCP_GUARD_REASON_POLICY : MCP_GUARD_REASON_DEFAULT;
+
+	mcp_fill_cache_key(&key, hook_id, resource_id);
+	mcp_l1_store(&key, action, 0, rule_id, reason);
 
 	if (action != MCP_GUARD_ACTION_ALLOW)
-		mcp_emit_event(hook_id, action, layer, reason, rule_id, resource_id,
-			       start_ns, 0, rule_name, 0, 0, 0,
+		mcp_emit_event(hook_id, action, MCP_GUARD_LAYER_L3,
+			       reason, rule_id, resource_id, start_ns,
+			       0, scratch->rule_name, 0, 0, 0,
 			       mcp_should_block(action) ? MCP_GUARD_DENY_ERRNO : 0);
 
 	return mcp_action_ret(action);
@@ -219,18 +439,48 @@ SEC("lsm/socket_connect")
 int BPF_PROG(mcp_guard_socket_connect, struct socket *sock, struct sockaddr *address,
 	     int addrlen, int ret)
 {
-	char rule_name[MCP_GUARD_RULE_NAME_LEN] = {};
 	struct mcp_cache_value cached = {};
 	struct mcp_cache_key key = {};
-	struct sockaddr_in addr4 = {};
 	__u16 family = 0;
 	__u16 port = 0;
 	__u32 ipv4_addr = 0;
-	__u64 resource_id = 0;
+	__u64 resource_id;
 	__u64 start_ns = bpf_ktime_get_ns();
-	__u32 layer = MCP_GUARD_LAYER_L3;
-	__u32 rule_id = 0;
-	__u32 reason = MCP_GUARD_REASON_DEFAULT;
+	int action;
+
+	(void)sock;
+	(void)addrlen;
+
+	if (ret)
+		return ret;
+
+	mcp_set_tail_start(start_ns);
+	resource_id = mcp_socket_resource_id(address, &family, &ipv4_addr, &port);
+	if (family == MCP_GUARD_AF_INET) {
+		mcp_fill_cache_key(&key, MCP_GUARD_HOOK_SOCKET_CONNECT, resource_id);
+		action = mcp_l1_lookup(&key, &cached);
+		if (action != MCP_GUARD_ACTION_UNSET) {
+			if (action != MCP_GUARD_ACTION_ALLOW)
+				mcp_emit_event(MCP_GUARD_HOOK_SOCKET_CONNECT,
+					       action, MCP_GUARD_LAYER_L1,
+					       MCP_GUARD_REASON_L1_CACHE,
+					       cached.rule_id, resource_id, start_ns,
+					       0, 0, family, ipv4_addr, port,
+					       mcp_should_block(action) ?
+					       MCP_GUARD_DENY_ERRNO : 0);
+			return mcp_action_ret(action);
+		}
+	}
+
+	bpf_tail_call(ctx, &socket_connect_pipeline, MCP_GUARD_TAIL_L2);
+	return mcp_tail_fail_ret();
+}
+
+SEC("lsm/socket_connect")
+int BPF_PROG(mcp_guard_socket_connect_l2, struct socket *sock, struct sockaddr *address,
+	     int addrlen, int ret)
+{
+	__u16 family = 0;
 	int action;
 
 	(void)sock;
@@ -240,43 +490,50 @@ int BPF_PROG(mcp_guard_socket_connect, struct socket *sock, struct sockaddr *add
 		return ret;
 
 	action = mcp_l2_socket_decide(address, &family);
-	if (family == MCP_GUARD_AF_INET && address) {
-		bpf_probe_read_kernel(&addr4, sizeof(addr4), address);
-		ipv4_addr = addr4.sin_addr.s_addr;
-		port = bpf_ntohs(addr4.sin_port);
-		resource_id = ((__u64)ipv4_addr << 16) | port;
+	if (action == MCP_GUARD_ACTION_UNSET) {
+		bpf_tail_call(ctx, &socket_connect_pipeline, MCP_GUARD_TAIL_L3);
+		return mcp_tail_fail_ret();
 	}
+
+	return mcp_action_ret(action);
+}
+
+SEC("lsm/socket_connect")
+int BPF_PROG(mcp_guard_socket_connect_l3, struct socket *sock, struct sockaddr *address,
+	     int addrlen, int ret)
+{
+	struct mcp_scratch *scratch = mcp_get_scratch();
+	struct mcp_cache_key key = {};
+	__u16 family = 0;
+	__u16 port = 0;
+	__u32 ipv4_addr = 0;
+	__u64 resource_id;
+	__u64 start_ns = mcp_get_tail_start();
+	__u32 rule_id = 0;
+	__u32 reason;
+	int action;
+
+	(void)sock;
+	(void)addrlen;
+
+	if (ret)
+		return ret;
+	if (!scratch)
+		return mcp_tail_fail_ret();
+
+	scratch->rule_name[0] = 0;
+	resource_id = mcp_socket_resource_id(address, &family, &ipv4_addr, &port);
+	action = mcp_l3_ipv4_decide(ipv4_addr, port, &rule_id,
+				    scratch->rule_name);
+	reason = rule_id ? MCP_GUARD_REASON_POLICY : MCP_GUARD_REASON_DEFAULT;
 
 	mcp_fill_cache_key(&key, MCP_GUARD_HOOK_SOCKET_CONNECT, resource_id);
-	if (family == MCP_GUARD_AF_INET) {
-		int cached_action = mcp_l1_lookup(&key, &cached);
-
-		if (cached_action != MCP_GUARD_ACTION_UNSET) {
-			if (cached_action != MCP_GUARD_ACTION_ALLOW)
-				mcp_emit_event(MCP_GUARD_HOOK_SOCKET_CONNECT,
-					       cached_action, MCP_GUARD_LAYER_L1,
-					       MCP_GUARD_REASON_L1_CACHE,
-					       cached.rule_id, resource_id, start_ns, 0, 0, family,
-					       ipv4_addr, port,
-					       mcp_should_block(cached_action) ?
-					       MCP_GUARD_DENY_ERRNO : 0);
-			return mcp_action_ret(cached_action);
-		}
-	}
-
-	if (action == MCP_GUARD_ACTION_UNSET) {
-		action = mcp_l3_ipv4_decide(ipv4_addr, port, &rule_id, rule_name);
-		reason = rule_id ? MCP_GUARD_REASON_POLICY : MCP_GUARD_REASON_DEFAULT;
-	} else {
-		layer = MCP_GUARD_LAYER_L2;
-		reason = MCP_GUARD_REASON_L2_SAFE;
-	}
-
 	mcp_l1_store(&key, action, 0, rule_id, reason);
 
 	if (action != MCP_GUARD_ACTION_ALLOW)
-		mcp_emit_event(MCP_GUARD_HOOK_SOCKET_CONNECT, action, layer, reason,
-			       rule_id, resource_id, start_ns, 0, rule_name, family,
+		mcp_emit_event(MCP_GUARD_HOOK_SOCKET_CONNECT, action,
+			       MCP_GUARD_LAYER_L3, reason, rule_id, resource_id,
+			       start_ns, 0, scratch->rule_name, family,
 			       ipv4_addr, port,
 			       mcp_should_block(action) ? MCP_GUARD_DENY_ERRNO : 0);
 

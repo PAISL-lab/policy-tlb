@@ -5,13 +5,93 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <bpf/bpf.h>
 #include <bpf/libbpf.h>
 
+#include "common.h"
 #include "mcp_guard.skel.h"
 
 struct mcp_bpf {
 	struct mcp_guard_bpf *skel;
 };
+
+static void mcp_disable_tail_autoattach(struct mcp_guard_bpf *skel)
+{
+	bpf_program__set_autoattach(skel->progs.mcp_guard_bprm_check_security_l2, false);
+	bpf_program__set_autoattach(skel->progs.mcp_guard_bprm_check_security_l3, false);
+	bpf_program__set_autoattach(skel->progs.mcp_guard_file_open_l2, false);
+	bpf_program__set_autoattach(skel->progs.mcp_guard_file_open_l3, false);
+	bpf_program__set_autoattach(skel->progs.mcp_guard_file_permission_l2, false);
+	bpf_program__set_autoattach(skel->progs.mcp_guard_file_permission_l3, false);
+	bpf_program__set_autoattach(skel->progs.mcp_guard_socket_connect_l2, false);
+	bpf_program__set_autoattach(skel->progs.mcp_guard_socket_connect_l3, false);
+}
+
+static int mcp_update_tail_call(struct bpf_map *map, __u32 index,
+				struct bpf_program *prog)
+{
+	int map_fd = bpf_map__fd(map);
+	int prog_fd = bpf_program__fd(prog);
+
+	if (map_fd < 0 || prog_fd < 0)
+		return -EINVAL;
+
+	if (bpf_map_update_elem(map_fd, &index, &prog_fd, BPF_ANY) != 0)
+		return -errno;
+
+	return 0;
+}
+
+static int mcp_populate_tail_calls(struct mcp_guard_bpf *skel)
+{
+	int err;
+
+	err = mcp_update_tail_call(skel->maps.exec_pipeline,
+				   MCP_GUARD_TAIL_L2,
+				   skel->progs.mcp_guard_bprm_check_security_l2);
+	if (err)
+		return err;
+	err = mcp_update_tail_call(skel->maps.exec_pipeline,
+				   MCP_GUARD_TAIL_L3,
+				   skel->progs.mcp_guard_bprm_check_security_l3);
+	if (err)
+		return err;
+
+	err = mcp_update_tail_call(skel->maps.file_open_pipeline,
+				   MCP_GUARD_TAIL_L2,
+				   skel->progs.mcp_guard_file_open_l2);
+	if (err)
+		return err;
+	err = mcp_update_tail_call(skel->maps.file_open_pipeline,
+				   MCP_GUARD_TAIL_L3,
+				   skel->progs.mcp_guard_file_open_l3);
+	if (err)
+		return err;
+
+	err = mcp_update_tail_call(skel->maps.file_permission_pipeline,
+				   MCP_GUARD_TAIL_L2,
+				   skel->progs.mcp_guard_file_permission_l2);
+	if (err)
+		return err;
+	err = mcp_update_tail_call(skel->maps.file_permission_pipeline,
+				   MCP_GUARD_TAIL_L3,
+				   skel->progs.mcp_guard_file_permission_l3);
+	if (err)
+		return err;
+
+	err = mcp_update_tail_call(skel->maps.socket_connect_pipeline,
+				   MCP_GUARD_TAIL_L2,
+				   skel->progs.mcp_guard_socket_connect_l2);
+	if (err)
+		return err;
+	err = mcp_update_tail_call(skel->maps.socket_connect_pipeline,
+				   MCP_GUARD_TAIL_L3,
+				   skel->progs.mcp_guard_socket_connect_l3);
+	if (err)
+		return err;
+
+	return 0;
+}
 
 int mcp_bpf_open_load(struct mcp_bpf **out)
 {
@@ -33,10 +113,19 @@ int mcp_bpf_open_load(struct mcp_bpf **out)
 		free(guard);
 		return err;
 	}
+	mcp_disable_tail_autoattach(guard->skel);
 
 	err = mcp_guard_bpf__load(guard->skel);
 	if (err) {
 		fprintf(stderr, "failed to load BPF object: %d\n", err);
+		mcp_bpf_destroy(guard);
+		return err;
+	}
+
+	err = mcp_populate_tail_calls(guard->skel);
+	if (err) {
+		fprintf(stderr, "failed to populate BPF tail-call maps: %s\n",
+			strerror(-err));
 		mcp_bpf_destroy(guard);
 		return err;
 	}
