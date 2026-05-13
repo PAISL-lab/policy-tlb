@@ -39,6 +39,7 @@ struct mcp_policy_rule {
 
 struct mcp_path_lpm_key {
 	__u32 prefixlen;
+	__u32 generation;
 	char path[MCP_GUARD_PATH_LEN];
 };
 
@@ -49,6 +50,39 @@ struct mcp_path_policy_value {
 	__u32 hook_mask;
 	__u32 flags;
 	__u32 value_len;
+	__u64 resource_id;
+	char name[MCP_GUARD_RULE_NAME_LEN];
+};
+
+struct mcp_command_lpm_key {
+	__u32 prefixlen;
+	__u32 generation;
+	char command[MCP_GUARD_RULE_VALUE_LEN];
+};
+
+struct mcp_network_lpm_key {
+	__u32 prefixlen;
+	__u32 generation;
+	__u32 port;
+	__u32 ipv4_addr;
+};
+
+struct mcp_resource_policy_key {
+	__u32 generation;
+	__u32 rule_type;
+	__u64 resource_id;
+};
+
+struct mcp_indexed_policy_value {
+	__u32 enabled;
+	__u32 rule_id;
+	__u32 action;
+	__u32 hook_mask;
+	__u32 flags;
+	__u32 value_len;
+	__u32 port;
+	__u32 ipv4_addr;
+	__u32 ipv4_mask;
 	__u64 resource_id;
 	char name[MCP_GUARD_RULE_NAME_LEN];
 };

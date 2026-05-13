@@ -90,17 +90,17 @@ Current schema is intentionally small:
 ## Remaining Loader Roadmap
 
 The loader is already able to load BPF programs, populate tail-call maps, write
-basic policies, load path prefixes into an LPM trie, load MCP agent scope maps,
-read events, reload on `SIGHUP`, print metrics on shutdown, and publish
-GUI-facing JSON. The remaining work is mainly GUI integration and
-benchmark/report support.
+basic policies, load generation-aware path/command/network/resource indexes,
+load MCP agent scope maps, read events, reload on `SIGHUP`, print metrics on
+shutdown, and publish GUI-facing JSON. The remaining work is mainly GUI
+integration and benchmark/report support.
 
 | Framework Phase | Loader Responsibility | Main Files |
 |---|---|---|
-| 2. LPM_TRIE path policy | Complete: path prefixes are normalized, loaded into LPM trie, and covered by runtime tests | `policy_loader.c`, `bpf_loader.c` |
+| 2. LPM_TRIE/hash indexed policy | Complete: path/command/network policies use generation-aware indexed maps, with resource hash entries for follow-up file access | `policy_loader.c`, `bpf_loader.c`, `l3_slow_path.bpf.c` |
 | 3. L2 flag/cache strengthening | Complete: separated config/rule flags, startup summary, unknown flag rejection, and runtime L2 test | `policy_loader.c`, `main.c` |
 | 4. metrics/histogram map | Complete: shutdown summary, periodic snapshots, layer ratios, and GUI metrics JSON | `bpf_loader.c`, `main.c`, `unix_socket_server.c` |
-| 5. atomic policy reload | Complete: validation, map snapshot/rollback, generation bump, and reload_result JSON | `policy_loader.c`, `main.c` |
+| 5. atomic policy reload | Complete: inactive-generation staging, active generation flip, old generation cleanup, snapshot/rollback, and reload_result JSON | `policy_loader.c`, `main.c` |
 | 6. MCP agent scoping | Complete for comm/pid/tgid selectors: profile parsing, scope maps, BPF prefiltering, event attribution, and runtime test | `policy_loader.c`, `main.c`, `l3_slow_path.bpf.c` |
 | 7. GUI | Stabilize socket schema and add health/reload/metrics messages | `unix_socket_server.c`, `main.c` |
 | 8. benchmark/report | Add benchmark mode and write CSV/JSON reports | `main.c`, new `report_writer.c` |
@@ -109,27 +109,35 @@ benchmark/report support.
 
 ### 1. LPM_TRIE Path Policy Loader
 
-Path policy rules are now loaded into `path_policy_trie` and the file-open L3
-slow path consults the trie before falling back to the default action. Command
-and network rules still use the fixed-size `policy_rules` array.
+Path, command, network, and resource-id policies are now loaded into indexed
+BPF maps. The L3 slow path consults generation-aware maps before falling back to
+the default action.
 
 Implemented:
 
 - Path policy trie map id in `loader/bpf_loader.h`.
+- Command policy trie map id.
+- Network policy trie map id.
+- Resource policy hash map id.
 - Trie map fd exposure through `mcp_bpf_map_fd`.
 - User-space trie key/value construction.
 - Path prefixes loaded from `dangerous_paths.json`.
+- Command prefixes loaded from `dangerous_commands.json`.
+- IPv4/CIDR plus port rules loaded from `dangerous_network.json`.
+- Resource-id hash entries for follow-up file read/write checks.
 - Path policy normalization:
   - reject empty paths
   - require absolute paths
   - collapse trailing slashes except `/`
   - reject values longer than `MCP_GUARD_RULE_VALUE_LEN`
-- Trie cleanup during successful reload.
+- Inactive-generation writes before active generation flip.
+- Old-generation cleanup after successful reload.
 - Runtime coverage through `tests/test_path_lpm_trie.sh`.
 
 Remaining:
 
-- Decide final metadata layout if path rules move fully out of `policy_rules`.
+- Keep `policy_rules` as compatibility metadata or remove it after all tooling
+  reads the indexed maps directly.
 
 Acceptance:
 
@@ -211,18 +219,21 @@ Implemented:
 - Parse every policy file into memory first.
 - Build the complete policy state before touching BPF maps.
 - Validate the complete policy set before map writes.
-- Snapshot active policy rules, config, and path trie entries.
-- Roll back active maps if a reload write fails before epoch bump.
+- Stage path/command/network/resource index entries under the next inactive
+  generation.
+- Snapshot active policy rules, config, indexed maps, and scope maps.
+- Delete staged generation entries if a reload write fails before epoch bump.
 - Track `active_generation` in policy config.
 - Increment `global_epoch` only after policy maps/config are updated.
+- Clean up the previous generation's indexed entries after a successful flip.
 - Publish `"type":"reload_result"` JSON over the GUI socket.
 - `tests/test_atomic_reload.sh` coverage.
 
 Remaining:
 
-- A true inactive-generation map swap would require duplicated BPF maps or
-  generation-aware lookups in BPF. The current implementation uses snapshot/rollback around the
-  existing maps.
+- Scope maps still use snapshot/rollback because scope selectors are keyed by
+  process identity rather than generation. Add generation to scope keys if
+  profile reloads become high-frequency.
 
 Acceptance:
 

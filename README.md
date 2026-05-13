@@ -88,7 +88,9 @@ The current implementation includes:
 - L1 decision cache using a BPF LRU per-CPU hash map.
 - Physical L1 -> L2 -> L3 separation using per-hook BPF tail-call
   `PROG_ARRAY` maps.
-- LPM trie backed path-prefix policy lookup for the file-open slow path.
+- Generation-aware LPM trie policy lookup for file path, command prefix, and
+  IPv4/port network rules.
+- Generation-aware resource-id hash lookup for follow-up file access.
 - Runtime metrics and histogram counters by hook, layer, and action.
 - Configurable L2/cache behavior flags loaded from policy config.
 - MCP agent scoping through a profile file and `comm`/`pid`/`tgid` selector
@@ -276,10 +278,10 @@ and fail-closed tail-call behavior.
 
 L3 performs deeper checks:
 
-- command prefix checks for exec
-- LPM trie backed path-prefix matching for file-open policy
-- resource-id matching for follow-up file access
-- IPv4/port matching for socket connect
+- generation-aware command-prefix trie checks for exec
+- generation-aware path-prefix trie matching for file-open policy
+- generation-aware resource-id hash matching for follow-up file access
+- generation-aware IPv4/port trie matching for socket connect
 - ring buffer event emission for deny/audit decisions
 - cache population for follow-up events
 
@@ -331,11 +333,15 @@ Policy reload does not scan and delete every cache entry. Instead:
 This makes global invalidation O(1), which is the core lock-free epoch idea from
 the paper.
 
-Reload is atomic for the current map layout: the loader parses and validates
-the new policy first, snapshots active maps, writes the new map state, and flips
-the visible generation plus epoch last. If a reload fails before the epoch bump,
-the loader restores the previous rules, config, path trie entries, and scope
-maps, then emits a `reload_result` JSON message.
+Reload uses a generation-aware policy index layout. The loader parses and
+validates the new policy first, writes path, command, network, and resource
+indexes under the next inactive generation, and flips `policy_config` plus
+`global_epoch` last. BPF lookups include `active_generation` in their keys, so
+partially written future-generation entries are invisible to the running policy.
+After a successful flip, the loader removes the previous generation's indexed
+entries. If a reload fails before the epoch bump, the loader deletes staged
+entries, restores snapshotted maps where needed, and emits a `reload_result`
+JSON message.
 
 ## Metrics
 
@@ -594,10 +600,8 @@ L1 hit behavior against the L3 slow path.
 
 ## Current Limitations
 
-- GUI files are still skeletons; development guides are available under `docs/`.
 - Event timing is emitted for deny/audit events, not every allow event.
-- Command and network L3 policy matching still scans a fixed-size array map;
-  file-open path-prefix policy now uses an LPM trie.
+- GUI files are still maturing toward a complete operator dashboard.
 
 ## Developer Guides
 

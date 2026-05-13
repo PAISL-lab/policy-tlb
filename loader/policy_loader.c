@@ -31,6 +31,21 @@ struct path_policy_entry {
 	struct mcp_path_policy_value value;
 };
 
+struct command_policy_entry {
+	struct mcp_command_lpm_key key;
+	struct mcp_indexed_policy_value value;
+};
+
+struct network_policy_entry {
+	struct mcp_network_lpm_key key;
+	struct mcp_indexed_policy_value value;
+};
+
+struct resource_policy_entry {
+	struct mcp_resource_policy_key key;
+	struct mcp_indexed_policy_value value;
+};
+
 struct comm_scope_entry {
 	struct mcp_comm_scope_key key;
 	struct mcp_scope_value value;
@@ -45,10 +60,16 @@ struct policy_map_snapshot {
 	struct mcp_policy_rule rules[MCP_GUARD_MAX_RULES];
 	struct mcp_policy_config config;
 	struct path_policy_entry path_entries[MCP_GUARD_MAX_RULES];
+	struct command_policy_entry command_entries[MCP_GUARD_MAX_RULES];
+	struct network_policy_entry network_entries[MCP_GUARD_MAX_RULES];
+	struct resource_policy_entry resource_entries[MCP_GUARD_MAX_RULES];
 	struct comm_scope_entry comm_entries[MCP_GUARD_MAX_SCOPES];
 	struct id_scope_entry pid_entries[MCP_GUARD_MAX_SCOPES];
 	struct id_scope_entry tgid_entries[MCP_GUARD_MAX_SCOPES];
 	__u32 path_entry_count;
+	__u32 command_entry_count;
+	__u32 network_entry_count;
+	__u32 resource_entry_count;
 	__u32 comm_entry_count;
 	__u32 pid_entry_count;
 	__u32 tgid_entry_count;
@@ -773,6 +794,93 @@ static int snapshot_path_trie(int path_trie_fd, struct policy_map_snapshot *snap
 	return 0;
 }
 
+static int snapshot_command_trie(int fd, struct policy_map_snapshot *snapshot)
+{
+	struct mcp_command_lpm_key key = {};
+	struct mcp_command_lpm_key next_key = {};
+	int have_key = 0;
+
+	if (fd < 0 || !snapshot)
+		return 0;
+
+	snapshot->command_entry_count = 0;
+	while (bpf_map_get_next_key(fd, have_key ? &key : NULL, &next_key) == 0) {
+		struct command_policy_entry *entry;
+
+		if (snapshot->command_entry_count >= MCP_GUARD_MAX_RULES)
+			return -ENOSPC;
+
+		entry = &snapshot->command_entries[snapshot->command_entry_count];
+		entry->key = next_key;
+		if (bpf_map_lookup_elem(fd, &entry->key, &entry->value) != 0)
+			return -errno;
+
+		snapshot->command_entry_count++;
+		key = next_key;
+		have_key = 1;
+	}
+
+	return 0;
+}
+
+static int snapshot_network_trie(int fd, struct policy_map_snapshot *snapshot)
+{
+	struct mcp_network_lpm_key key = {};
+	struct mcp_network_lpm_key next_key = {};
+	int have_key = 0;
+
+	if (fd < 0 || !snapshot)
+		return 0;
+
+	snapshot->network_entry_count = 0;
+	while (bpf_map_get_next_key(fd, have_key ? &key : NULL, &next_key) == 0) {
+		struct network_policy_entry *entry;
+
+		if (snapshot->network_entry_count >= MCP_GUARD_MAX_RULES)
+			return -ENOSPC;
+
+		entry = &snapshot->network_entries[snapshot->network_entry_count];
+		entry->key = next_key;
+		if (bpf_map_lookup_elem(fd, &entry->key, &entry->value) != 0)
+			return -errno;
+
+		snapshot->network_entry_count++;
+		key = next_key;
+		have_key = 1;
+	}
+
+	return 0;
+}
+
+static int snapshot_resource_hash(int fd, struct policy_map_snapshot *snapshot)
+{
+	struct mcp_resource_policy_key key = {};
+	struct mcp_resource_policy_key next_key = {};
+	int have_key = 0;
+
+	if (fd < 0 || !snapshot)
+		return 0;
+
+	snapshot->resource_entry_count = 0;
+	while (bpf_map_get_next_key(fd, have_key ? &key : NULL, &next_key) == 0) {
+		struct resource_policy_entry *entry;
+
+		if (snapshot->resource_entry_count >= MCP_GUARD_MAX_RULES)
+			return -ENOSPC;
+
+		entry = &snapshot->resource_entries[snapshot->resource_entry_count];
+		entry->key = next_key;
+		if (bpf_map_lookup_elem(fd, &entry->key, &entry->value) != 0)
+			return -errno;
+
+		snapshot->resource_entry_count++;
+		key = next_key;
+		have_key = 1;
+	}
+
+	return 0;
+}
+
 static int snapshot_comm_scopes(int fd, struct policy_map_snapshot *snapshot)
 {
 	struct mcp_comm_scope_key key = {};
@@ -828,6 +936,8 @@ static int snapshot_id_scopes(int fd, struct id_scope_entry *entries,
 }
 
 static int snapshot_policy_maps(int rules_fd, int path_trie_fd,
+				int command_trie_fd, int network_trie_fd,
+				int resource_hash_fd,
 				int scope_comm_fd, int scope_pid_fd,
 				int scope_tgid_fd, int config_fd,
 				struct policy_map_snapshot *snapshot)
@@ -845,6 +955,15 @@ static int snapshot_policy_maps(int rules_fd, int path_trie_fd,
 	if (err)
 		return err;
 	err = snapshot_path_trie(path_trie_fd, snapshot);
+	if (err)
+		return err;
+	err = snapshot_command_trie(command_trie_fd, snapshot);
+	if (err)
+		return err;
+	err = snapshot_network_trie(network_trie_fd, snapshot);
+	if (err)
+		return err;
+	err = snapshot_resource_hash(resource_hash_fd, snapshot);
 	if (err)
 		return err;
 	err = snapshot_comm_scopes(scope_comm_fd, snapshot);
@@ -870,12 +989,128 @@ static int clear_path_trie(int path_trie_fd)
 	return 0;
 }
 
-static __u32 path_prefix_bits(const char *path)
+static int clear_path_generation(int fd, __u32 generation)
 {
-	return (__u32)strnlen(path, MCP_GUARD_PATH_LEN) * 8;
+	struct mcp_path_lpm_key key = {};
+	struct mcp_path_lpm_key next_key = {};
+	int have_key = 0;
+
+	if (fd < 0)
+		return 0;
+
+	while (bpf_map_get_next_key(fd, have_key ? &key : NULL, &next_key) == 0) {
+		key = next_key;
+		have_key = 1;
+		if (next_key.generation == generation) {
+			bpf_map_delete_elem(fd, &next_key);
+			have_key = 0;
+		}
+	}
+	return 0;
 }
 
-static int write_path_trie(int path_trie_fd, const struct policy_load_state *state)
+static int clear_command_generation(int fd, __u32 generation)
+{
+	struct mcp_command_lpm_key key = {};
+	struct mcp_command_lpm_key next_key = {};
+	int have_key = 0;
+
+	if (fd < 0)
+		return 0;
+
+	while (bpf_map_get_next_key(fd, have_key ? &key : NULL, &next_key) == 0) {
+		key = next_key;
+		have_key = 1;
+		if (next_key.generation == generation) {
+			bpf_map_delete_elem(fd, &next_key);
+			have_key = 0;
+		}
+	}
+	return 0;
+}
+
+static int clear_network_generation(int fd, __u32 generation)
+{
+	struct mcp_network_lpm_key key = {};
+	struct mcp_network_lpm_key next_key = {};
+	int have_key = 0;
+
+	if (fd < 0)
+		return 0;
+
+	while (bpf_map_get_next_key(fd, have_key ? &key : NULL, &next_key) == 0) {
+		key = next_key;
+		have_key = 1;
+		if (next_key.generation == generation) {
+			bpf_map_delete_elem(fd, &next_key);
+			have_key = 0;
+		}
+	}
+	return 0;
+}
+
+static int clear_resource_generation(int fd, __u32 generation)
+{
+	struct mcp_resource_policy_key key = {};
+	struct mcp_resource_policy_key next_key = {};
+	int have_key = 0;
+
+	if (fd < 0)
+		return 0;
+
+	while (bpf_map_get_next_key(fd, have_key ? &key : NULL, &next_key) == 0) {
+		key = next_key;
+		have_key = 1;
+		if (next_key.generation == generation) {
+			bpf_map_delete_elem(fd, &next_key);
+			have_key = 0;
+		}
+	}
+	return 0;
+}
+
+static __u32 path_prefix_bits(const char *path)
+{
+	return 32 + (__u32)strnlen(path, MCP_GUARD_PATH_LEN) * 8;
+}
+
+static __u32 command_prefix_bits(const char *command)
+{
+	return 32 + (__u32)strnlen(command, MCP_GUARD_RULE_VALUE_LEN) * 8;
+}
+
+static __u32 ipv4_prefix_bits(__u32 mask)
+{
+	__u32 host_mask = ntohl(mask);
+	__u32 bits = 0;
+
+	for (__u32 i = 0; i < 32; i++) {
+		if (!(host_mask & (1U << (31 - i))))
+			break;
+		bits++;
+	}
+	return 32 + 32 + bits;
+}
+
+static void indexed_value_from_rule(struct mcp_indexed_policy_value *value,
+				    const struct mcp_policy_rule *rule)
+{
+	memset(value, 0, sizeof(*value));
+	value->enabled = rule->enabled;
+	value->rule_id = rule->rule_id;
+	value->action = rule->action;
+	value->hook_mask = rule->hook_mask;
+	value->flags = rule->flags;
+	value->value_len = rule->value_len;
+	value->port = rule->port;
+	value->ipv4_addr = rule->ipv4_addr;
+	value->ipv4_mask = rule->ipv4_mask;
+	value->resource_id = rule->resource_id;
+	snprintf(value->name, sizeof(value->name), "%s", rule->name);
+}
+
+static int write_path_trie(int path_trie_fd, const struct policy_load_state *state,
+			   __u32 generation)
 {
 	if (path_trie_fd < 0)
 		return 0;
@@ -891,6 +1126,7 @@ static int write_path_trie(int path_trie_fd, const struct policy_load_state *sta
 			return -EINVAL;
 
 		key.prefixlen = path_prefix_bits(rule->value);
+		key.generation = generation;
 		snprintf(key.path, sizeof(key.path), "%s", rule->value);
 
 		value.enabled = rule->enabled;
@@ -903,6 +1139,86 @@ static int write_path_trie(int path_trie_fd, const struct policy_load_state *sta
 		snprintf(value.name, sizeof(value.name), "%s", rule->name);
 
 		if (bpf_map_update_elem(path_trie_fd, &key, &value, BPF_ANY) != 0)
+			return -errno;
+	}
+
+	return 0;
+}
+
+static int write_command_trie(int fd, const struct policy_load_state *state,
+			      __u32 generation)
+{
+	if (fd < 0)
+		return 0;
+
+	for (__u32 i = 0; i < state->next_index; i++) {
+		const struct mcp_policy_rule *rule = &state->rules[i];
+		struct mcp_command_lpm_key key = {};
+		struct mcp_indexed_policy_value value = {};
+
+		if (rule->rule_type != MCP_GUARD_RULE_COMMAND_PREFIX)
+			continue;
+		if (!rule->value[0])
+			return -EINVAL;
+
+		key.prefixlen = command_prefix_bits(rule->value);
+		key.generation = generation;
+		snprintf(key.command, sizeof(key.command), "%s", rule->value);
+		indexed_value_from_rule(&value, rule);
+
+		if (bpf_map_update_elem(fd, &key, &value, BPF_ANY) != 0)
+			return -errno;
+	}
+
+	return 0;
+}
+
+static int write_network_trie(int fd, const struct policy_load_state *state,
+			      __u32 generation)
+{
+	if (fd < 0)
+		return 0;
+
+	for (__u32 i = 0; i < state->next_index; i++) {
+		const struct mcp_policy_rule *rule = &state->rules[i];
+		struct mcp_network_lpm_key key = {};
+		struct mcp_indexed_policy_value value = {};
+
+		if (rule->rule_type != MCP_GUARD_RULE_IPV4_CONNECT)
+			continue;
+
+		key.prefixlen = ipv4_prefix_bits(rule->ipv4_mask);
+		key.generation = generation;
+		key.port = rule->port;
+		key.ipv4_addr = rule->ipv4_addr;
+		indexed_value_from_rule(&value, rule);
+
+		if (bpf_map_update_elem(fd, &key, &value, BPF_ANY) != 0)
+			return -errno;
+	}
+
+	return 0;
+}
+
+static int write_resource_hash(int fd, const struct policy_load_state *state,
+			       __u32 generation)
+{
+	if (fd < 0)
+		return 0;
+
+	for (__u32 i = 0; i < state->next_index; i++) {
+		const struct mcp_policy_rule *rule = &state->rules[i];
+		struct mcp_resource_policy_key key = {};
+		struct mcp_indexed_policy_value value = {};
+
+		if (!rule->resource_id)
+			continue;
+		key.generation = generation;
+		key.rule_type = rule->rule_type;
+		key.resource_id = rule->resource_id;
+		indexed_value_from_rule(&value, rule);
+
+		if (bpf_map_update_elem(fd, &key, &value, BPF_ANY) != 0)
 			return -errno;
 	}
 
@@ -1004,7 +1320,79 @@ static int restore_path_trie(int path_trie_fd,
 	return 0;
 }
 
-static int restore_policy_maps(int rules_fd, int path_trie_fd, int config_fd,
+static int restore_command_trie(int fd, const struct policy_map_snapshot *snapshot)
+{
+	int err;
+
+	if (fd < 0 || !snapshot)
+		return 0;
+
+	err = clear_command_generation(fd, snapshot->config.active_generation);
+	if (err)
+		return err;
+
+	for (__u32 i = 0; i < snapshot->command_entry_count; i++) {
+		const struct command_policy_entry *entry =
+			&snapshot->command_entries[i];
+
+		if (bpf_map_update_elem(fd, &entry->key, &entry->value,
+					BPF_ANY) != 0)
+			return -errno;
+	}
+
+	return 0;
+}
+
+static int restore_network_trie(int fd, const struct policy_map_snapshot *snapshot)
+{
+	int err;
+
+	if (fd < 0 || !snapshot)
+		return 0;
+
+	err = clear_network_generation(fd, snapshot->config.active_generation);
+	if (err)
+		return err;
+
+	for (__u32 i = 0; i < snapshot->network_entry_count; i++) {
+		const struct network_policy_entry *entry =
+			&snapshot->network_entries[i];
+
+		if (bpf_map_update_elem(fd, &entry->key, &entry->value,
+					BPF_ANY) != 0)
+			return -errno;
+	}
+
+	return 0;
+}
+
+static int restore_resource_hash(int fd, const struct policy_map_snapshot *snapshot)
+{
+	int err;
+
+	if (fd < 0 || !snapshot)
+		return 0;
+
+	err = clear_resource_generation(fd, snapshot->config.active_generation);
+	if (err)
+		return err;
+
+	for (__u32 i = 0; i < snapshot->resource_entry_count; i++) {
+		const struct resource_policy_entry *entry =
+			&snapshot->resource_entries[i];
+
+		if (bpf_map_update_elem(fd, &entry->key, &entry->value,
+					BPF_ANY) != 0)
+			return -errno;
+	}
+
+	return 0;
+}
+
+static int restore_policy_maps(int rules_fd, int path_trie_fd,
+			       int command_trie_fd, int network_trie_fd,
+			       int resource_hash_fd,
+			       int config_fd,
 			       int scope_comm_fd, int scope_pid_fd,
 			       int scope_tgid_fd,
 			       const struct policy_map_snapshot *snapshot)
@@ -1023,6 +1411,18 @@ static int restore_policy_maps(int rules_fd, int path_trie_fd, int config_fd,
 	}
 
 	err = restore_path_trie(path_trie_fd, snapshot);
+	if (err && !first_err)
+		first_err = err;
+
+	err = restore_command_trie(command_trie_fd, snapshot);
+	if (err && !first_err)
+		first_err = err;
+
+	err = restore_network_trie(network_trie_fd, snapshot);
+	if (err && !first_err)
+		first_err = err;
+
+	err = restore_resource_hash(resource_hash_fd, snapshot);
 	if (err && !first_err)
 		first_err = err;
 
@@ -1139,6 +1539,9 @@ static int join_policy_path(char *out, size_t out_len,
 int mcp_policy_load_dir(const char *policy_dir,
 			int rules_fd,
 			int path_trie_fd,
+			int command_trie_fd,
+			int network_trie_fd,
+			int resource_hash_fd,
 			int scope_comm_fd,
 			int scope_pid_fd,
 			int scope_tgid_fd,
@@ -1209,7 +1612,9 @@ int mcp_policy_load_dir(const char *policy_dir,
 	config.rule_count = state.next_index;
 	config.active_generation = 1;
 
-	err = snapshot_policy_maps(rules_fd, path_trie_fd, scope_comm_fd,
+	err = snapshot_policy_maps(rules_fd, path_trie_fd, command_trie_fd,
+				   network_trie_fd, resource_hash_fd,
+				   scope_comm_fd,
 				   scope_pid_fd, scope_tgid_fd, config_fd,
 				   &snapshot);
 	if (err)
@@ -1223,23 +1628,88 @@ int mcp_policy_load_dir(const char *policy_dir,
 	if (err)
 		return err;
 
-	err = clear_path_trie(path_trie_fd);
+	err = clear_path_generation(path_trie_fd, config.active_generation);
 	if (err) {
-		restore_policy_maps(rules_fd, path_trie_fd, config_fd,
+		restore_policy_maps(rules_fd, path_trie_fd, command_trie_fd,
+				    network_trie_fd, resource_hash_fd, config_fd,
 				    scope_comm_fd, scope_pid_fd, scope_tgid_fd,
 				    &snapshot);
 		return err;
 	}
-	err = write_path_trie(path_trie_fd, &state);
+	err = clear_command_generation(command_trie_fd, config.active_generation);
 	if (err) {
-		restore_policy_maps(rules_fd, path_trie_fd, config_fd,
+		restore_policy_maps(rules_fd, path_trie_fd, command_trie_fd,
+				    network_trie_fd, resource_hash_fd, config_fd,
+				    scope_comm_fd, scope_pid_fd, scope_tgid_fd,
+				    &snapshot);
+		return err;
+	}
+	err = clear_network_generation(network_trie_fd, config.active_generation);
+	if (err) {
+		restore_policy_maps(rules_fd, path_trie_fd, command_trie_fd,
+				    network_trie_fd, resource_hash_fd, config_fd,
+				    scope_comm_fd, scope_pid_fd, scope_tgid_fd,
+				    &snapshot);
+		return err;
+	}
+	err = clear_resource_generation(resource_hash_fd, config.active_generation);
+	if (err) {
+		restore_policy_maps(rules_fd, path_trie_fd, command_trie_fd,
+				    network_trie_fd, resource_hash_fd, config_fd,
+				    scope_comm_fd, scope_pid_fd, scope_tgid_fd,
+				    &snapshot);
+		return err;
+	}
+	err = write_path_trie(path_trie_fd, &state, config.active_generation);
+	if (err) {
+		clear_path_generation(path_trie_fd, config.active_generation);
+		restore_policy_maps(rules_fd, path_trie_fd, command_trie_fd,
+				    network_trie_fd, resource_hash_fd, config_fd,
+				    scope_comm_fd, scope_pid_fd, scope_tgid_fd,
+				    &snapshot);
+		return err;
+	}
+	err = write_command_trie(command_trie_fd, &state, config.active_generation);
+	if (err) {
+		clear_path_generation(path_trie_fd, config.active_generation);
+		clear_command_generation(command_trie_fd, config.active_generation);
+		restore_policy_maps(rules_fd, path_trie_fd, command_trie_fd,
+				    network_trie_fd, resource_hash_fd, config_fd,
+				    scope_comm_fd, scope_pid_fd, scope_tgid_fd,
+				    &snapshot);
+		return err;
+	}
+	err = write_network_trie(network_trie_fd, &state, config.active_generation);
+	if (err) {
+		clear_path_generation(path_trie_fd, config.active_generation);
+		clear_command_generation(command_trie_fd, config.active_generation);
+		clear_network_generation(network_trie_fd, config.active_generation);
+		restore_policy_maps(rules_fd, path_trie_fd, command_trie_fd,
+				    network_trie_fd, resource_hash_fd, config_fd,
+				    scope_comm_fd, scope_pid_fd, scope_tgid_fd,
+				    &snapshot);
+		return err;
+	}
+	err = write_resource_hash(resource_hash_fd, &state, config.active_generation);
+	if (err) {
+		clear_path_generation(path_trie_fd, config.active_generation);
+		clear_command_generation(command_trie_fd, config.active_generation);
+		clear_network_generation(network_trie_fd, config.active_generation);
+		clear_resource_generation(resource_hash_fd, config.active_generation);
+		restore_policy_maps(rules_fd, path_trie_fd, command_trie_fd,
+				    network_trie_fd, resource_hash_fd, config_fd,
 				    scope_comm_fd, scope_pid_fd, scope_tgid_fd,
 				    &snapshot);
 		return err;
 	}
 	err = write_rules(rules_fd, &state);
 	if (err) {
-		restore_policy_maps(rules_fd, path_trie_fd, config_fd,
+		clear_path_generation(path_trie_fd, config.active_generation);
+		clear_command_generation(command_trie_fd, config.active_generation);
+		clear_network_generation(network_trie_fd, config.active_generation);
+		clear_resource_generation(resource_hash_fd, config.active_generation);
+		restore_policy_maps(rules_fd, path_trie_fd, command_trie_fd,
+				    network_trie_fd, resource_hash_fd, config_fd,
 				    scope_comm_fd, scope_pid_fd, scope_tgid_fd,
 				    &snapshot);
 		return err;
@@ -1247,14 +1717,24 @@ int mcp_policy_load_dir(const char *policy_dir,
 	err = write_scope_maps(scope_comm_fd, scope_pid_fd, scope_tgid_fd,
 			       &scope, &config);
 	if (err) {
-		restore_policy_maps(rules_fd, path_trie_fd, config_fd,
+		clear_path_generation(path_trie_fd, config.active_generation);
+		clear_command_generation(command_trie_fd, config.active_generation);
+		clear_network_generation(network_trie_fd, config.active_generation);
+		clear_resource_generation(resource_hash_fd, config.active_generation);
+		restore_policy_maps(rules_fd, path_trie_fd, command_trie_fd,
+				    network_trie_fd, resource_hash_fd, config_fd,
 				    scope_comm_fd, scope_pid_fd, scope_tgid_fd,
 				    &snapshot);
 		return err;
 	}
 	if (bpf_map_update_elem(config_fd, &key, &config, BPF_ANY) != 0) {
 		err = -errno;
-		restore_policy_maps(rules_fd, path_trie_fd, config_fd,
+		clear_path_generation(path_trie_fd, config.active_generation);
+		clear_command_generation(command_trie_fd, config.active_generation);
+		clear_network_generation(network_trie_fd, config.active_generation);
+		clear_resource_generation(resource_hash_fd, config.active_generation);
+		restore_policy_maps(rules_fd, path_trie_fd, command_trie_fd,
+				    network_trie_fd, resource_hash_fd, config_fd,
 				    scope_comm_fd, scope_pid_fd, scope_tgid_fd,
 				    &snapshot);
 		return err;
@@ -1262,10 +1742,19 @@ int mcp_policy_load_dir(const char *policy_dir,
 
 	err = bump_epoch(epoch_fd, &epoch);
 	if (err) {
-		restore_policy_maps(rules_fd, path_trie_fd, config_fd,
+		restore_policy_maps(rules_fd, path_trie_fd, command_trie_fd,
+				    network_trie_fd, resource_hash_fd, config_fd,
 				    scope_comm_fd, scope_pid_fd, scope_tgid_fd,
 				    &snapshot);
 		return err;
+	}
+
+	if (snapshot.have_config &&
+	    snapshot.config.active_generation != config.active_generation) {
+		clear_path_generation(path_trie_fd, snapshot.config.active_generation);
+		clear_command_generation(command_trie_fd, snapshot.config.active_generation);
+		clear_network_generation(network_trie_fd, snapshot.config.active_generation);
+		clear_resource_generation(resource_hash_fd, snapshot.config.active_generation);
 	}
 
 	if (result) {

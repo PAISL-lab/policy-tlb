@@ -163,6 +163,16 @@ static __always_inline void mcp_copy_rule_name_from_path_value(
 	}
 }
 
+static __always_inline void mcp_copy_rule_name_from_indexed_value(
+	char *dst, const struct mcp_indexed_policy_value *rule)
+{
+	for (__u32 i = 0; i < MCP_GUARD_RULE_NAME_LEN; i++) {
+		dst[i] = rule->name[i];
+		if (!dst[i])
+			break;
+	}
+}
+
 static __always_inline int mcp_l3_path_trie_decide(__u32 hook_id,
 						   const char *path,
 						   __u64 resource_id,
@@ -171,12 +181,14 @@ static __always_inline int mcp_l3_path_trie_decide(__u32 hook_id,
 {
 	struct mcp_path_lpm_key key = {};
 	struct mcp_path_policy_value *rule;
+	struct mcp_policy_config *cfg = mcp_config();
 	__u32 hook_mask = mcp_guard_hook_mask(hook_id);
 
 	if (!path || !path[0])
 		goto default_action;
 
-	key.prefixlen = MCP_GUARD_PATH_LEN * 8;
+	key.prefixlen = 32 + MCP_GUARD_PATH_LEN * 8;
+	key.generation = cfg ? cfg->active_generation : 0;
 	for (__u32 i = 0; i < MCP_GUARD_PATH_LEN; i++) {
 		key.path[i] = path[i];
 		if (!path[i])
@@ -201,6 +213,45 @@ default_action:
 	return mcp_policy_default_action();
 }
 
+static __always_inline int mcp_l3_command_trie_decide(__u32 hook_id,
+						      const char *value,
+						      __u32 *rule_id,
+						      char *rule_name)
+{
+	struct mcp_command_lpm_key key = {};
+	struct mcp_indexed_policy_value *rule;
+	struct mcp_policy_config *cfg = mcp_config();
+	__u32 hook_mask = mcp_guard_hook_mask(hook_id);
+
+	if (!value || !value[0])
+		goto default_action;
+
+	key.prefixlen = 32 + MCP_GUARD_RULE_VALUE_LEN * 8;
+	key.generation = cfg ? cfg->active_generation : 0;
+	for (__u32 i = 0; i < MCP_GUARD_RULE_VALUE_LEN; i++) {
+		key.command[i] = value[i];
+		if (!value[i])
+			break;
+	}
+
+	rule = bpf_map_lookup_elem(&command_policy_trie, &key);
+	if (!rule || !rule->enabled)
+		goto default_action;
+	if (!(rule->hook_mask & hook_mask))
+		goto default_action;
+
+	if (rule_id)
+		*rule_id = rule->rule_id;
+	if (rule_name)
+		mcp_copy_rule_name_from_indexed_value(rule_name, rule);
+	return rule->action;
+
+default_action:
+	if (rule_id)
+		*rule_id = 0;
+	return mcp_policy_default_action();
+}
+
 static __always_inline int mcp_l3_string_decide(__u32 rule_type,
 						__u32 hook_id,
 						const char *value,
@@ -213,6 +264,9 @@ static __always_inline int mcp_l3_string_decide(__u32 rule_type,
 	if (rule_type == MCP_GUARD_RULE_PATH_PREFIX)
 		return mcp_l3_path_trie_decide(hook_id, value, resource_id,
 					       rule_id, rule_name);
+	if (rule_type == MCP_GUARD_RULE_COMMAND_PREFIX)
+		return mcp_l3_command_trie_decide(hook_id, value, rule_id,
+						  rule_name);
 
 	for (__u32 i = 0; i < MCP_GUARD_MAX_RULES; i++) {
 		struct mcp_policy_rule *rule = bpf_map_lookup_elem(&policy_rules, &i);
@@ -252,24 +306,20 @@ static __always_inline int mcp_l3_resource_decide(__u32 rule_type,
 						  __u32 *rule_id,
 						  char *rule_name)
 {
+	struct mcp_resource_policy_key key = {};
+	struct mcp_indexed_policy_value *rule;
+	struct mcp_policy_config *cfg = mcp_config();
 	__u32 hook_mask = mcp_guard_hook_mask(hook_id);
 
-	for (__u32 i = 0; i < MCP_GUARD_MAX_RULES; i++) {
-		struct mcp_policy_rule *rule = bpf_map_lookup_elem(&policy_rules, &i);
-
-		if (!rule || !rule->enabled)
-			continue;
-		if (rule->rule_type != rule_type)
-			continue;
-		if (!(rule->hook_mask & hook_mask))
-			continue;
-		if (!rule->resource_id || rule->resource_id != resource_id)
-			continue;
-
+	key.generation = cfg ? cfg->active_generation : 0;
+	key.rule_type = rule_type;
+	key.resource_id = resource_id;
+	rule = bpf_map_lookup_elem(&resource_policy_hash, &key);
+	if (rule && rule->enabled && (rule->hook_mask & hook_mask)) {
 		if (rule_id)
 			*rule_id = rule->rule_id;
 		if (rule_name)
-			mcp_copy_rule_name(rule_name, rule);
+			mcp_copy_rule_name_from_indexed_value(rule_name, rule);
 		return rule->action;
 	}
 
@@ -283,26 +333,25 @@ static __always_inline int mcp_l3_ipv4_decide(__u32 ipv4_addr,
 					      __u32 *rule_id,
 					      char *rule_name)
 {
+	struct mcp_network_lpm_key key = {};
+	struct mcp_indexed_policy_value *rule;
+	struct mcp_policy_config *cfg = mcp_config();
 	__u32 hook_mask = mcp_guard_hook_mask(MCP_GUARD_HOOK_SOCKET_CONNECT);
 
-	for (__u32 i = 0; i < MCP_GUARD_MAX_RULES; i++) {
-		struct mcp_policy_rule *rule = bpf_map_lookup_elem(&policy_rules, &i);
-
-		if (!rule || !rule->enabled)
-			continue;
-		if (rule->rule_type != MCP_GUARD_RULE_IPV4_CONNECT)
-			continue;
-		if (!(rule->hook_mask & hook_mask))
-			continue;
-		if (rule->port && rule->port != port)
-			continue;
-		if (rule->ipv4_mask && ((ipv4_addr ^ rule->ipv4_addr) & rule->ipv4_mask))
-			continue;
-
+	key.prefixlen = 32 + 32 + 32;
+	key.generation = cfg ? cfg->active_generation : 0;
+	key.port = port;
+	key.ipv4_addr = ipv4_addr;
+	rule = bpf_map_lookup_elem(&network_policy_trie, &key);
+	if (!rule) {
+		key.port = 0;
+		rule = bpf_map_lookup_elem(&network_policy_trie, &key);
+	}
+	if (rule && rule->enabled && (rule->hook_mask & hook_mask)) {
 		if (rule_id)
 			*rule_id = rule->rule_id;
 		if (rule_name)
-			mcp_copy_rule_name(rule_name, rule);
+			mcp_copy_rule_name_from_indexed_value(rule_name, rule);
 		return rule->action;
 	}
 

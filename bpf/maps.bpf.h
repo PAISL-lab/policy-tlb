@@ -68,11 +68,34 @@ struct {
 
 struct {
 	__uint(type, BPF_MAP_TYPE_LPM_TRIE);
-	__uint(max_entries, MCP_GUARD_MAX_RULES);
+	__uint(max_entries, MCP_GUARD_MAX_RULES * 2);
 	__uint(map_flags, BPF_F_NO_PREALLOC);
 	__type(key, struct mcp_path_lpm_key);
 	__type(value, struct mcp_path_policy_value);
 } path_policy_trie SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_LPM_TRIE);
+	__uint(max_entries, MCP_GUARD_MAX_RULES * 2);
+	__uint(map_flags, BPF_F_NO_PREALLOC);
+	__type(key, struct mcp_command_lpm_key);
+	__type(value, struct mcp_indexed_policy_value);
+} command_policy_trie SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_LPM_TRIE);
+	__uint(max_entries, MCP_GUARD_MAX_RULES * 2);
+	__uint(map_flags, BPF_F_NO_PREALLOC);
+	__type(key, struct mcp_network_lpm_key);
+	__type(value, struct mcp_indexed_policy_value);
+} network_policy_trie SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, MCP_GUARD_MAX_RULES * 2);
+	__type(key, struct mcp_resource_policy_key);
+	__type(value, struct mcp_indexed_policy_value);
+} resource_policy_hash SEC(".maps");
 
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
