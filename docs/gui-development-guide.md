@@ -122,6 +122,399 @@ Primary layout:
 
 Use restrained operational styling. This is a security dashboard, so prioritize readability, density, and fast scanning over decorative visuals.
 
+## Phase 7 Implementation Scope
+
+The GUI phase should turn the current skeleton into a usable operator
+dashboard. It is not just a visual shell: it must consume live loader messages,
+preserve recent event state, expose metrics, and keep working when the loader is
+temporarily unavailable.
+
+Core work:
+
+- Make the PySide6 app launch cleanly from `gui/run_gui.py`.
+- Stabilize `SocketClient` for `/tmp/mcp-guard.sock`.
+- Parse `event`, `metrics_snapshot`, and `reload_result` messages.
+- Render deny/audit/allow events in an Events table.
+- Show L1/L2/L3 hit counts, hit ratios, and latency summaries.
+- Show `profile_id` and `agent_id` for MCP agent attribution.
+- Show transient deny alerts without stealing focus.
+- Add reconnect handling and visible connection state.
+- Add sample replay mode so GUI development works without root or BPF.
+- Update `gui/README.md` with setup, live mode, and replay mode instructions.
+
+Implementation order:
+
+1. Finish socket ingestion.
+   - Use `QLocalSocket`.
+   - Buffer partial reads until newline.
+   - Route by `type`.
+   - Keep malformed JSON recoverable.
+
+2. Finish data models.
+   - Normalize missing fields.
+   - Store bounded recent events.
+   - Maintain counters by action, hook, layer, profile, and agent.
+   - Expose an `EventTableModel`.
+
+3. Finish the dashboard.
+   - Top connection/status strip.
+   - Summary counters.
+   - L1/L2/L3 ratio cards or compact panels.
+   - Latest deny/audit event panel.
+
+4. Finish Events view.
+   - Sortable table.
+   - Filters for action, hook, layer, profile/agent, and text search.
+   - Detail panel with raw JSON and timing comparison.
+
+5. Finish Metrics view.
+   - Consume loader `metrics_snapshot` JSON.
+   - Display total counts, layer ratios, average/min/max latency, and histogram
+     buckets.
+   - Fall back to event-derived counters when no snapshot has arrived.
+
+6. Finish Policy/Runtime view.
+   - Show last reload result.
+   - Show active epoch/generation when present.
+   - Show current socket path and reconnect state.
+
+7. Finish alerts.
+   - Show popup only for `action=deny` by default.
+   - Include hook, path/destination, rule, profile/agent, and duration.
+   - Add a UI toggle to disable popups.
+
+8. Finish replay and documentation.
+   - Keep `gui/samples/events.ndjson` representative.
+   - Add replay mode to `run_gui.py` or a small helper module.
+   - Document live and replay workflows.
+
+Out of scope for this phase:
+
+- Editing kernel policy files from the GUI.
+- Running privileged loader commands from the GUI.
+- Remote monitoring over TCP.
+- Long-term event persistence or database storage.
+
+## Development Specification
+
+This section is the implementation contract for Phase 7. A developer should be
+able to implement the GUI directly from this section without needing to infer
+module responsibilities from the rest of the repository.
+
+### Command Line Interface
+
+`gui/run_gui.py` must support these modes:
+
+```bash
+python gui/run_gui.py
+python gui/run_gui.py --socket /tmp/mcp-guard.sock
+python gui/run_gui.py --replay gui/samples/events.ndjson
+python gui/run_gui.py --no-popups
+```
+
+Arguments:
+
+| Argument | Required | Default | Behavior |
+|---|---:|---|---|
+| `--socket PATH` | no | `/tmp/mcp-guard.sock` | Unix socket path for live loader events |
+| `--replay PATH` | no | none | Read newline-delimited sample JSON instead of connecting to the socket |
+| `--no-popups` | no | false | Start with deny popups disabled |
+| `--max-events N` | no | `5000` | Maximum in-memory event history |
+
+Rules:
+
+- `--replay` and live socket mode are mutually exclusive.
+- The GUI must not require `sudo`.
+- CLI parsing belongs in `gui/run_gui.py` or `gui/mcp_guard_gui/app.py`.
+
+### Module Contract
+
+Required modules and responsibilities:
+
+| Module | Required Classes/Functions | Responsibility |
+|---|---|---|
+| `app.py` | `main(argv=None)`, `create_app()` | Parse CLI, create `QApplication`, load style, create `MainWindow` |
+| `socket_client.py` | `SocketClient`, `ReplayClient` | Live socket ingestion and sample replay ingestion |
+| `models.py` | `EventRecord`, `EventStore`, `EventTableModel`, `MetricsSnapshot`, `RuntimeStatus` | Normalize messages, hold state, expose table model |
+| `main_window.py` | `MainWindow` | Build dashboard/events/metrics/runtime UI and wire signals |
+| `alert_popup.py` | `AlertPopup`, optional `AlertManager` | Non-blocking deny notifications |
+| `resources.py` | `load_stylesheet()`, `resource_path()` | Resolve `style.qss`, icons, and sample paths |
+
+Do not reintroduce C++/Qt source files under `gui/src/`. The GUI implementation
+is Python/PySide6 only.
+
+### Signal Contract
+
+`SocketClient` and `ReplayClient` must emit Qt signals with these meanings:
+
+| Signal | Payload | Meaning |
+|---|---|---|
+| `message_received` | `dict` | Any parsed JSON object before routing |
+| `event_received` | `dict` | A security event, usually `type=event` or missing `type` |
+| `metrics_received` | `dict` | A `type=metrics_snapshot` message |
+| `reload_result_received` | `dict` | A `type=reload_result` message |
+| `connection_state_changed` | `str` | `disconnected`, `connecting`, `connected`, `replaying`, or `error` |
+| `error_received` | `str` | Recoverable socket, replay, or JSON parse error |
+
+Routing rules:
+
+- Missing `type` means `event` for backward compatibility.
+- Unknown `type` emits `message_received` and is ignored by event table logic.
+- Malformed JSON emits `error_received` and does not stop ingestion.
+
+### Event Schema
+
+Normalize incoming events to `EventRecord` with these fields:
+
+| Field | Type | Default | Display |
+|---|---|---|---|
+| `timestamp_ns` | int | `ts_ns` or `0` | Details, optional hidden sort key |
+| `pid` | int | `0` | Table |
+| `tgid` | int | `0` | Details |
+| `uid` | int | `0` | Details |
+| `comm` | str | `"-"` | Table/details |
+| `hook` | str | `"-"` | Table/filter |
+| `action` | str | `"-"` | Table/filter |
+| `layer` | str | `"-"` | Table/filter |
+| `duration_ns` | int | `0` | Table/details |
+| `duration_us` | float | `duration_ns / 1000` | Table/details |
+| `model_us` | float | by layer | Details |
+| `delta_us` | float | `duration_us - model_us` | Details |
+| `rule_id` | int | `0` | Details |
+| `profile_id` | int | `0` | Table/details |
+| `agent_id` | int | `0` | Table/details |
+| `error` | int | `0` | Details |
+| `path` | str | `"-"` | Table/details |
+| `rule` | str | `"-"` | Table/details |
+| `port` | int | `0` | Table/details when nonzero |
+| `resource_id` | int | `0` | Details |
+| `epoch` | int | `0` | Status/details |
+| `raw` | dict | original message | Details JSON |
+
+Model baseline by layer:
+
+| Layer | `model_us` |
+|---|---:|
+| `L1` | `0.018` |
+| `L2` | `0.023` |
+| `L3` | `0.989` |
+| unknown | `0.0` |
+
+### Metrics Schema
+
+The GUI must accept both current and future metrics JSON. Minimum required
+behavior:
+
+- If a message has `type=metrics_snapshot`, do not add it as an event row.
+- Extract total count and L1/L2/L3 ratios when fields are present.
+- If detailed hook/layer/action entries are present, render them in Metrics view.
+- If no metrics snapshot has arrived, derive counts from `EventStore`.
+
+Recommended normalized metrics fields:
+
+| Field | Type | Default |
+|---|---|---|
+| `total` | int | `0` |
+| `l1_ratio` | float | derived or `0.0` |
+| `l2_ratio` | float | derived or `0.0` |
+| `l3_ratio` | float | derived or `0.0` |
+| `entries` | list[dict] | `[]` |
+| `received_at` | datetime | now |
+
+### Reload Result Schema
+
+Normalize `type=reload_result` messages into `RuntimeStatus`.
+
+Fields:
+
+| Field | Type | Default |
+|---|---|---|
+| `success` | bool | false |
+| `rule_count` | int | `0` |
+| `generation` | int | `0` |
+| `epoch` | int | `0` |
+| `error` | str | `""` |
+
+UI behavior:
+
+- Show successful reloads in neutral/positive status color.
+- Show failed reloads in warning status color.
+- Do not clear the event table on reload.
+
+### Event Store Rules
+
+`EventStore` is the single source of truth for event-derived UI state.
+
+Required behavior:
+
+- Keep at most `max_events` records.
+- Drop oldest records when capacity is exceeded.
+- Maintain counters by:
+  - action
+  - hook
+  - layer
+  - profile_id
+  - agent_id
+- Maintain latest deny event.
+- Maintain current epoch as the max nonzero epoch observed.
+- Provide filtering without mutating the raw event list.
+
+Filters:
+
+| Filter | Values |
+|---|---|
+| action | `all`, `allow`, `deny`, `audit` |
+| hook | `all`, `exec`, `file_open`, `file_read`, `file_write`, `socket_connect` |
+| layer | `all`, `L1`, `L2`, `L3` |
+| profile/agent | `all` or exact numeric id |
+| text | substring match against `path`, `rule`, `comm`, `hook`, `action` |
+
+### Event Table Columns
+
+Required columns, in order:
+
+| Column | Source |
+|---|---|
+| Time | `timestamp_ns`, formatted as local time when possible |
+| Action | `action` |
+| Hook | `hook` |
+| Layer | `layer` |
+| Duration | `duration_us` with 3 decimals |
+| PID | `pid` |
+| Profile | `profile_id` |
+| Agent | `agent_id` |
+| Target | `path` or `dst=:port` for network events |
+| Rule | `rule` |
+
+Rows:
+
+- `deny` rows should be visually prominent but readable.
+- `audit` rows should be distinct from `allow`.
+- Never rely on color alone; keep text labels visible.
+
+### Window Layout Specification
+
+The first viewport must be the operational dashboard.
+
+Recommended widget hierarchy:
+
+```text
+QMainWindow
+  central QWidget
+    QVBoxLayout
+      Status strip
+      QSplitter horizontal
+        Navigation QListWidget or QTabWidget
+        Main QStackedWidget
+          Dashboard page
+          Events page
+          Metrics page
+          Runtime page
+      Bottom status line
+```
+
+Dashboard page:
+
+- Summary row: connection, total events, deny count, current epoch/generation.
+- Layer panel: L1/L2/L3 counts and ratios.
+- Latency panel: average duration by layer, latest event duration.
+- Latest deny/audit panel.
+
+Events page:
+
+- Filter toolbar.
+- `QTableView` backed by `EventTableModel`.
+- Details panel with raw JSON and timing comparison.
+
+Metrics page:
+
+- Snapshot timestamp.
+- Layer ratio bars.
+- Metrics table for hook/layer/action rows when available.
+- Histogram bucket display when available.
+
+Runtime page:
+
+- Socket path.
+- Connection state.
+- Last socket error.
+- Last reload result.
+- Popup enabled/disabled setting.
+
+### Alert Specification
+
+Alert popup behavior:
+
+- Trigger only for `action=deny` unless the user enables audit alerts later.
+- Include: action, hook, target, rule, profile_id, agent_id, duration_us.
+- Do not steal focus.
+- Auto-dismiss after 5 seconds.
+- Queue at most 3 visible popups; collapse additional alerts into a counter.
+- Provide a UI toggle to disable future popups for the current session.
+
+### Replay Specification
+
+Replay mode is required for non-root GUI development.
+
+Input format:
+
+- One JSON object per line.
+- Blank lines are ignored.
+- Invalid lines emit `error_received` and replay continues.
+
+Timing:
+
+- Initial implementation may replay lines at 100 ms intervals.
+- A future `--replay-speed` may be added, but is not required in Phase 7.
+
+Replay mode state:
+
+- `connection_state_changed` emits `replaying`.
+- Replay messages go through the same normalization path as live socket messages.
+
+### Error Handling
+
+Required error handling:
+
+- Missing socket path: show disconnected, retry.
+- Socket disconnect: show disconnected, retry with backoff.
+- JSON decode error: show last error, continue.
+- Missing required event fields: create a malformed event record and show `-`
+  for unavailable values.
+- UI exceptions in message handling must not kill socket ingestion; catch and
+  surface them through status/error display where practical.
+
+Reconnect backoff:
+
+- Start at 250 ms.
+- Double up to a maximum of 5 seconds.
+- Reset to 250 ms after a successful connection.
+
+### Nonfunctional Requirements
+
+- UI must remain responsive while ingesting events.
+- No blocking socket reads on the UI thread.
+- Memory must be bounded by `max_events`.
+- Unknown JSON fields must be preserved in details via `raw`.
+- The app must work on a normal user account.
+- Styling must remain readable with `gui/resources/style.qss`.
+
+### Implementation Checklist
+
+- [ ] CLI supports live and replay mode.
+- [ ] `SocketClient` handles reconnect and JSON lines.
+- [ ] `ReplayClient` reads `events.ndjson`.
+- [ ] `EventRecord` normalization handles missing fields.
+- [ ] `EventStore` keeps bounded history and counters.
+- [ ] `EventTableModel` exposes required columns.
+- [ ] Dashboard shows counters, ratios, latest high-risk event.
+- [ ] Events page supports filters and details panel.
+- [ ] Metrics page handles `metrics_snapshot`.
+- [ ] Runtime page shows socket/reload/error state.
+- [ ] Deny popup works and can be disabled.
+- [ ] `gui/README.md` documents setup, live mode, replay mode, troubleshooting.
+- [ ] Manual test plan passes.
+
 ## PySide6 Components
 
 ### `SocketClient`
@@ -258,69 +651,64 @@ Keep color as a secondary signal; the table text must remain readable.
    - Auto-dismiss without focus stealing.
    - Add a settings toggle to disable popups.
 
-6. Add offline/demo mode.
-   - Provide `gui/samples/events.ndjson`.
-   - Add `--demo gui/samples/events.ndjson` option.
-   - Let GUI work continue without root, BPF, or loader access.
+6. Add sample replay.
+   - Read `gui/samples/events.ndjson`.
+   - Feed messages through the same model path as live socket events.
+   - Make replay mode usable without `sudo` or a running loader.
 
-7. Route metrics messages.
-   - Display shutdown-summary-derived event counters initially.
-   - Route loader `metrics_snapshot` messages to `MetricsView`.
-   - Ignore unknown message types safely.
+7. Update GUI documentation.
+   - Document virtualenv setup.
+   - Document live mode with `sudo ./mcp-guard policies`.
+   - Document replay mode.
+   - Include screenshots only after the UI is stable.
 
-## Test Plan
+## Acceptance Criteria
 
-Manual live-loader test:
+- `python gui/run_gui.py` launches the GUI without root privileges.
+- When the loader is not running, the GUI shows `disconnected` and keeps trying
+  to reconnect without freezing.
+- When `sudo ./mcp-guard policies` is running, the GUI receives live events from
+  `/tmp/mcp-guard.sock`.
+- Deny events appear in the Events table and trigger one popup by default.
+- Metrics snapshots update the dashboard without blocking event ingestion.
+- Reload results are visible in the runtime/status area.
+- Missing optional JSON fields render as `-`; unknown fields do not crash the
+  app.
+- The app can replay `gui/samples/events.ndjson` without a running loader.
+- `profile_id` and `agent_id` are visible in table or detail views.
+- `gui/README.md` explains setup, live run, replay run, and troubleshooting.
 
-```bash
-sudo ./mcp-guard policies
-python3 gui/run_gui.py
-sudo cat /etc/shadow
-```
+## Manual Test Plan
 
-Expected GUI behavior:
-
-- Connection state becomes connected.
-- Deny event appears in the table.
-- Alert popup appears for the deny event.
-- Details panel shows `layer`, `duration_ns`, `rule`, and `path`.
-
-Manual L2/metrics observation:
-
-```bash
-sudo ./mcp-guard policies
-python3 gui/run_gui.py
-# run network/file activity in another terminal
-```
-
-Expected behavior:
-
-- Events update live when deny/audit records arrive.
-- L1/L2/L3 counters update from event-derived data.
-- Loader `metrics_snapshot` messages update the Metrics tab without requiring GUI restart.
-
-Manual no-loader test:
-
-- Start GUI while `/tmp/mcp-guard.sock` does not exist.
-- GUI shows disconnected state.
-- Start loader later.
-- GUI reconnects without restart.
-
-Demo mode test:
+Live mode:
 
 ```bash
-python3 gui/run_gui.py --demo gui/samples/events.ndjson
+sudo ./mcp-guard policies --metrics-interval 1s
+python gui/run_gui.py
 ```
 
-Expected behavior:
+Trigger representative events:
 
-- GUI displays sample events without requiring root.
-- Filters, details panel, counters, and popup logic work.
+```bash
+/usr/bin/true
+cat /tmp/some-protected-file
+nc -vz 127.0.0.1 4444
+```
 
-Malformed input test:
+Replay mode:
 
-- Feed a bad JSON line in demo mode or through a test socket.
-- GUI records an error state but keeps running.
+```bash
+python gui/run_gui.py --replay gui/samples/events.ndjson
+```
+
+Check:
+
+- Connection indicator changes correctly.
+- Events table updates without UI stalls.
+- Dashboard counters match incoming messages.
+- Deny popup appears and auto-dismisses.
+- Metrics and reload messages do not appear as normal event rows unless the UI
+  intentionally has a system-message view.
 
 ## Coordination With Loader Developer
 
