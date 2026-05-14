@@ -119,6 +119,8 @@ loader가 보내는 추가 메시지 및 timing 필드:
 - Events table: 시간, action, hook, layer, duration, pid, path/destination, rule.
 - Details panel: 선택된 event JSON, timing comparison, decision reason, process metadata.
 - 하단 status area: 마지막 socket error와 마지막 reload result.
+- 차단 안내 popup: MCP Guard가 동작을 deny하면, 해당 작업이 차단되었다는
+  사실을 사용자가 바로 알 수 있도록 popup을 표시합니다.
 
 보안 운영 도구이므로 장식보다 가독성, 정보 밀도, 빠른 스캔성을 우선합니다.
 
@@ -135,6 +137,7 @@ GUI 단계의 목표는 현재 skeleton을 실제로 사용할 수 있는 운영
 - `/tmp/mcp-guard.sock`용 `SocketClient`를 안정화합니다.
 - `event`, `metrics_snapshot`, `reload_result` 메시지를 parsing합니다.
 - deny/audit/allow 이벤트를 Events table에 표시합니다.
+- 작업이 차단된 경우(`action=deny`) 명확한 popup 안내를 표시합니다.
 - L1/L2/L3 hit count, hit ratio, latency summary를 표시합니다.
 - MCP agent attribution을 위해 `profile_id`, `agent_id`를 표시합니다.
 - focus를 빼앗지 않는 deny alert popup을 표시합니다.
@@ -444,7 +447,11 @@ Runtime page:
 Alert popup 동작:
 
 - 기본값으로 `action=deny`에서만 trigger합니다.
+- popup title은 작업이 차단되었다는 사실을 명확히 알려야 합니다.
+  예: `MCP Guard가 작업을 차단했습니다`.
 - action, hook, target, rule, profile_id, agent_id, duration_us를 포함합니다.
+- 짧은 설명 문구를 포함합니다.
+  예: `활성 MCP Guard 정책에 의해 이 요청이 거부되었습니다.`
 - focus를 빼앗지 않습니다.
 - 5초 후 자동으로 닫힙니다.
 - 동시에 보이는 popup은 최대 3개입니다. 추가 alert는 counter로 합칩니다.
@@ -481,6 +488,16 @@ Replay mode 상태:
 - message 처리 중 UI exception이 socket ingestion을 죽이면 안 됩니다. 가능한
   범위에서 catch하고 status/error 영역에 표시합니다.
 
+차단 안내 notification 규칙:
+
+- `action=deny` event마다 popup이 비활성화되어 있지 않다면 사용자에게 보이는
+  notification을 정확히 하나 생성합니다.
+- notification은 `path` 또는 `dst=:port`를 사용해 차단된 target을 식별해야
+  합니다.
+- 가능한 경우 matched `rule`을 보여줘야 합니다.
+- 단순 실패처럼 표현하지 말고, MCP Guard 정책에 의해 차단되었다고 명확히
+  표현해야 합니다.
+
 Reconnect backoff:
 
 - 250 ms에서 시작합니다.
@@ -509,6 +526,7 @@ Reconnect backoff:
 - [ ] Metrics page가 `metrics_snapshot`을 처리합니다.
 - [ ] Runtime page가 socket/reload/error state를 표시합니다.
 - [ ] Deny popup이 동작하고 비활성화할 수 있습니다.
+- [ ] 차단 안내 popup이 MCP Guard가 action을 deny했다는 사실을 명확히 설명합니다.
 - [ ] `gui/README.md`가 setup, live mode, replay mode, troubleshooting을 문서화합니다.
 - [ ] 수동 테스트 계획을 통과합니다.
 

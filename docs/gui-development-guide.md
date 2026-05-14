@@ -119,6 +119,8 @@ Primary layout:
 - Events table: time, action, hook, layer, duration, pid, path/destination, rule.
 - Details panel: selected event JSON, timing comparison, decision reason, process metadata.
 - Bottom status area: last socket error and last reload result.
+- Block notification popup: when MCP Guard denies an action, show a clear
+  user-facing popup explaining that the operation was blocked.
 
 Use restrained operational styling. This is a security dashboard, so prioritize readability, density, and fast scanning over decorative visuals.
 
@@ -135,6 +137,8 @@ Core work:
 - Stabilize `SocketClient` for `/tmp/mcp-guard.sock`.
 - Parse `event`, `metrics_snapshot`, and `reload_result` messages.
 - Render deny/audit/allow events in an Events table.
+- Show a clear popup notification whenever an operation is blocked
+  (`action=deny`).
 - Show L1/L2/L3 hit counts, hit ratios, and latency summaries.
 - Show `profile_id` and `agent_id` for MCP agent attribution.
 - Show transient deny alerts without stealing focus.
@@ -446,7 +450,11 @@ Runtime page:
 Alert popup behavior:
 
 - Trigger only for `action=deny` unless the user enables audit alerts later.
+- The popup title must clearly say the operation was blocked, for example
+  `MCP Guard blocked an operation`.
 - Include: action, hook, target, rule, profile_id, agent_id, duration_us.
+- Include a short explanation line: `This request was denied by the active MCP
+  Guard policy.`
 - Do not steal focus.
 - Auto-dismiss after 5 seconds.
 - Queue at most 3 visible popups; collapse additional alerts into a counter.
@@ -484,6 +492,16 @@ Required error handling:
 - UI exceptions in message handling must not kill socket ingestion; catch and
   surface them through status/error display where practical.
 
+Blocked-operation notification rules:
+
+- Every `action=deny` event must create exactly one user-visible notification
+  unless popups are disabled.
+- The notification must identify the blocked target using `path` or
+  `dst=:port`.
+- The notification must show the matched `rule` when available.
+- The notification must not imply the operation merely failed; it must state
+  that MCP Guard blocked it by policy.
+
 Reconnect backoff:
 
 - Start at 250 ms.
@@ -512,6 +530,7 @@ Reconnect backoff:
 - [ ] Metrics page handles `metrics_snapshot`.
 - [ ] Runtime page shows socket/reload/error state.
 - [ ] Deny popup works and can be disabled.
+- [ ] Blocked-operation popup clearly explains that MCP Guard denied the action.
 - [ ] `gui/README.md` documents setup, live mode, replay mode, troubleshooting.
 - [ ] Manual test plan passes.
 
