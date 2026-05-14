@@ -336,36 +336,368 @@ Acceptance:
 
 ## Implementation Tasks
 
-1. Harden policy parsing in `loader/policy_loader.c`.
-   - Replace the current minimal string scanner with a real JSON parser or a small validated parser.
-   - Reject malformed files with filename and field-level error messages.
-   - Validate `action` as `allow`, `deny`, or `audit`.
-   - Validate required fields per rule type.
-   - Keep `MCP_GUARD_MAX_RULES` overflow as a hard error.
+The remaining loader work is Phase 7 support for the GUI control/event channel
+and Phase 8 benchmark/report mode. Earlier policy indexing, L2 flags, metrics
+maps, generation-aware reload, and agent scoping are already implemented and
+should be treated as stable contracts unless a test-driven bug fix requires a
+change.
 
-2. Improve daemon lifecycle in `loader/main.c`.
-   - Add CLI flags: `--policy-dir`, `--socket`, `--foreground`, `--verbose`.
-   - Keep positional `policies` path working for compatibility.
-   - Print a clear startup summary: loaded rules, epoch, socket path, attached hooks.
-   - On `SIGHUP`, reload policies atomically: if reload fails, keep the previous policy active.
+## Development Specification
 
-3. Make policy map updates atomic enough for live reload.
-   - Build new rule array in memory first.
-   - Write disabled/empty entries only after validation succeeds.
-   - Update config and rules.
-   - Increment epoch last.
+This section defines the remaining loader implementation contract. A loader
+developer should be able to implement the remaining work directly from this
+section.
 
-4. Improve event transport in `loader/unix_socket_server.c`.
-   - Keep newline-delimited JSON.
-   - Escape JSON strings correctly for `path` and `rule`.
-   - Add `comm`, `tgid`, `epoch`, `resource_id`, `duration_us`, `model_us`, and `delta_us`.
-   - Handle slow/disconnected clients without blocking ring buffer polling.
+### Remaining Scope
 
-5. Add runtime metrics.
-   - Count events by `hook`, `action`, and `layer`.
-   - Track `min/avg/p95/p99` for `duration_ns`.
-   - Print summary on shutdown.
-   - Optional: expose metrics JSON over the same socket with a distinct message type.
+| Area | Status | Required Next Work |
+|---|---|---|
+| GUI event socket | partially implemented | Complete event JSON fields, JSON escaping, health messages, slow-client handling |
+| Metrics transport | partially implemented | Ensure stable `metrics_snapshot` schema with detailed entries |
+| Reload transport | partially implemented | Keep `reload_result` schema stable and document all fields |
+| Benchmark/report | not implemented | Add CLI mode, workload timing capture, JSON/CSV report writer |
+| Policy parser hardening | partial | Improve validation/errors without changing policy file compatibility |
+
+Out of scope for the remaining loader phase:
+
+- Adding new BPF hooks.
+- Changing the 3-tier BPF pipeline.
+- Replacing the GUI with a web service.
+- Running GUI processes from the loader.
+
+### Command Line Interface
+
+The final loader CLI must support:
+
+```bash
+sudo ./mcp-guard [POLICY_DIR]
+sudo ./mcp-guard --policy-dir policies
+sudo ./mcp-guard policies --metrics-interval 1s
+sudo ./mcp-guard policies --socket /tmp/mcp-guard.sock
+sudo ./mcp-guard policies --benchmark --duration 30s --warmup 5s --report reports/run.json
+sudo ./mcp-guard policies --benchmark --duration 30s --report reports/run.csv
+```
+
+Arguments:
+
+| Argument | Required | Default | Behavior |
+|---|---:|---|---|
+| positional `POLICY_DIR` | no | `policies` | Backward-compatible policy directory |
+| `--policy-dir PATH` | no | positional or `policies` | Explicit policy directory |
+| `--socket PATH` | no | `/tmp/mcp-guard.sock` | Unix socket path for GUI JSON messages |
+| `--metrics-interval DURATION` | no | disabled | Emit periodic metrics snapshots |
+| `--benchmark` | no | false | Enable benchmark/report collection mode |
+| `--duration DURATION` | only with benchmark | `30s` | Benchmark measurement window |
+| `--warmup DURATION` | no | `0s` | Warmup window excluded from report |
+| `--report PATH` | with benchmark | generated under `reports/` | Report output path |
+| `--report-format json|csv` | no | inferred from extension | Explicit report format |
+| `--foreground` | no | true for now | Reserved for daemonization compatibility |
+| `--verbose` | no | false | Print extra loader diagnostics |
+
+Duration grammar:
+
+- Accept integer seconds: `30`.
+- Accept suffixes: `ms`, `s`, `m`.
+- Reject zero or negative durations where a positive value is required.
+
+Compatibility rules:
+
+- Existing `sudo ./mcp-guard policies` behavior must keep working.
+- Unknown options must print usage and exit nonzero.
+- Invalid benchmark/report combinations must fail before BPF attach.
+
+### Module Contract
+
+| File | Responsibility |
+|---|---|
+| `loader/main.c` | CLI parsing, lifecycle, signal handling, benchmark loop coordination |
+| `loader/bpf_loader.c` | libbpf open/load/attach, tail-call setup, map fd exposure |
+| `loader/policy_loader.c` | Policy parse/validate/load/reload into BPF maps |
+| `loader/ringbuf_reader.c` | BPF ring buffer polling and callback dispatch |
+| `loader/unix_socket_server.c` | Nonblocking GUI socket broadcast |
+| `loader/report_writer.c` | New file for benchmark JSON/CSV output |
+| `loader/report_writer.h` | New report writer API |
+
+Do not put report serialization into `main.c`; keep it in `report_writer.c` so
+the runtime daemon path remains readable.
+
+### GUI Socket Message Contract
+
+All GUI messages are newline-delimited JSON objects. Every message must include
+`type`.
+
+#### `type=event`
+
+Required fields:
+
+| Field | Type | Source |
+|---|---|---|
+| `type` | string | literal `event` |
+| `ts_ns` | integer | `mcp_event.ts_ns` |
+| `pid` | integer | `mcp_event.pid` |
+| `tgid` | integer | `mcp_event.tgid` |
+| `uid` | integer | `mcp_event.uid` |
+| `comm` | string | `mcp_event.comm` |
+| `hook` | string | decoded hook |
+| `action` | string | decoded action |
+| `layer` | string | decoded layer |
+| `duration_ns` | integer | `mcp_event.duration_ns` |
+| `duration_us` | number | `duration_ns / 1000.0` |
+| `model_us` | number | model baseline by layer |
+| `delta_us` | number | `duration_us - model_us` |
+| `rule_id` | integer | `mcp_event.rule_id` |
+| `profile_id` | integer | `mcp_event.profile_id` |
+| `agent_id` | integer | `mcp_event.agent_id` |
+| `error` | integer | errno value |
+| `path` | string | path or `""` |
+| `rule` | string | matched rule or `""` |
+| `port` | integer | destination port or `0` |
+| `ipv4_addr` | string | dotted IPv4 or `""` |
+| `resource_id` | integer | `mcp_event.resource_id` |
+| `epoch` | integer | `mcp_event.epoch` |
+
+Rules:
+
+- Escape JSON strings correctly for `path`, `rule`, and `comm`.
+- Keep numeric values numeric, not quoted.
+- `ipv4_addr` should be dotted decimal for GUI display.
+- Do not block ring buffer polling if no GUI client is connected.
+
+#### `type=metrics_snapshot`
+
+Minimum schema:
+
+```json
+{
+  "type": "metrics_snapshot",
+  "ts_ns": 123,
+  "total": 100,
+  "l1_ratio": 0.70,
+  "l2_ratio": 0.05,
+  "l3_ratio": 0.25,
+  "entries": []
+}
+```
+
+Detailed `entries[]` item:
+
+| Field | Type |
+|---|---|
+| `hook` | string |
+| `layer` | string |
+| `action` | string |
+| `count` | integer |
+| `avg_ns` | integer |
+| `min_ns` | integer |
+| `max_ns` | integer |
+| `buckets` | array of 8 integers |
+
+Rules:
+
+- Emit snapshots only when `--metrics-interval` is set.
+- Snapshot generation must not block event polling.
+- Empty metrics are valid and should emit `total=0`.
+
+#### `type=reload_result`
+
+Schema:
+
+```json
+{
+  "type": "reload_result",
+  "success": true,
+  "rule_count": 7,
+  "generation": 2,
+  "epoch": 2,
+  "error": ""
+}
+```
+
+Rules:
+
+- Emit after every initial load and `SIGHUP` reload attempt once the socket
+  server is available.
+- On failure, keep previous active policy and include a useful `error` string.
+
+#### `type=health`
+
+Schema:
+
+```json
+{
+  "type": "health",
+  "status": "running",
+  "policy_dir": "policies",
+  "generation": 2,
+  "epoch": 2,
+  "rule_count": 7,
+  "socket_path": "/tmp/mcp-guard.sock"
+}
+```
+
+Rules:
+
+- Emit once after startup.
+- Emit after successful reload.
+- Optional future heartbeat is allowed but not required.
+
+### JSON Escaping Specification
+
+`loader/unix_socket_server.c` must provide a small JSON string escaping helper.
+
+Required escaping:
+
+- `"` as `\"`
+- `\` as `\\`
+- newline as `\n`
+- carriage return as `\r`
+- tab as `\t`
+- control bytes below `0x20` as `\u00XX`
+
+The helper must truncate safely if the output buffer is too small and must never
+write past the buffer.
+
+### Slow Client Handling
+
+The Unix socket server must keep enforcement/event polling independent from GUI
+clients.
+
+Rules:
+
+- Each client fd must be nonblocking.
+- If a write returns `EAGAIN` or `EWOULDBLOCK`, drop that message for that
+  client or disconnect the client.
+- If a write returns `EPIPE`, `ECONNRESET`, or another permanent error, remove
+  the client.
+- Do not buffer unbounded data per client.
+- Enforce `MCP_GUARD_MAX_CLIENTS`.
+
+### Benchmark Mode Specification
+
+Benchmark mode observes runtime metrics for a fixed window and writes a report.
+It does not need to generate workload by itself in this phase; workload can be
+created by tests or a separate shell while the loader records metrics.
+
+Benchmark lifecycle:
+
+1. Parse and validate CLI.
+2. Load and attach BPF programs.
+3. Load policy.
+4. Start GUI socket unless disabled in a future option.
+5. Run warmup window, ignoring warmup metrics in the final report.
+6. Reset or mark the metrics baseline.
+7. Run measurement window.
+8. Read metrics, policy metadata, kernel metadata, and git metadata.
+9. Write report.
+10. Print report path and summary.
+11. Exit cleanly.
+
+Report metadata:
+
+| Field | Source |
+|---|---|
+| `timestamp` | wall-clock time |
+| `duration_ms` | CLI |
+| `warmup_ms` | CLI |
+| `policy_dir` | CLI |
+| `rule_count` | policy load result |
+| `generation` | policy load result |
+| `epoch` | policy load result |
+| `kernel_release` | `uname` |
+| `bpf_lsm_enabled` | `/sys/kernel/security/lsm` contains `bpf` |
+| `git_commit` | `git rev-parse HEAD` when available |
+| `loader_version` | optional static string |
+
+Report metrics:
+
+- total count
+- count by hook/layer/action
+- L1/L2/L3 ratios
+- average latency by hook/layer/action
+- min/max latency
+- histogram buckets
+- model baseline by layer
+- measured delta from model baseline
+
+JSON report shape:
+
+```json
+{
+  "metadata": {},
+  "summary": {
+    "total": 0,
+    "l1_ratio": 0.0,
+    "l2_ratio": 0.0,
+    "l3_ratio": 0.0
+  },
+  "metrics": []
+}
+```
+
+CSV report columns:
+
+```text
+hook,layer,action,count,avg_ns,min_ns,max_ns,bucket0,bucket1,bucket2,bucket3,bucket4,bucket5,bucket6,bucket7,model_us,delta_us
+```
+
+### Report Writer API
+
+Add `loader/report_writer.h`:
+
+```c
+struct mcp_report_metadata {
+	const char *policy_dir;
+	const char *report_path;
+	unsigned int duration_ms;
+	unsigned int warmup_ms;
+	unsigned int rule_count;
+	unsigned int generation;
+	unsigned long long epoch;
+};
+
+int mcp_write_json_report(const char *path,
+			  const struct mcp_report_metadata *metadata,
+			  const struct mcp_metric_snapshot *snapshot);
+int mcp_write_csv_report(const char *path,
+			 const struct mcp_report_metadata *metadata,
+			 const struct mcp_metric_snapshot *snapshot);
+```
+
+The exact internal snapshot type may be adjusted to match existing metrics
+reader code, but report writing must remain behind this API boundary.
+
+### Policy Parser Hardening
+
+Remaining parser work should improve diagnostics without breaking current JSON
+files.
+
+Required behavior:
+
+- Report filename and field name on validation errors.
+- Reject unknown `action` values instead of silently treating them as `allow`.
+- Reject invalid ports above `65535`.
+- Reject invalid CIDR prefixes.
+- Reject scoped agent profiles with no selectors.
+- Keep `MCP_GUARD_MAX_RULES` overflow as a hard error.
+
+### Loader Implementation Checklist
+
+- [ ] Event JSON includes `type`, `comm`, `tgid`, `epoch`, `resource_id`,
+  `duration_us`, `model_us`, `delta_us`, and `ipv4_addr`.
+- [ ] JSON strings are escaped correctly.
+- [ ] Unix socket clients are nonblocking and cannot stall ring buffer polling.
+- [ ] `metrics_snapshot` schema includes detailed entries.
+- [ ] `reload_result` schema is stable for success and failure.
+- [ ] Startup and reload publish `health` messages.
+- [ ] CLI supports `--policy-dir`, `--socket`, `--benchmark`, `--duration`,
+  `--warmup`, `--report`, `--report-format`, and keeps positional policy dir.
+- [ ] Benchmark mode writes JSON reports.
+- [ ] Benchmark mode writes CSV reports.
+- [ ] Reports include metadata needed for paper comparisons.
+- [ ] Parser diagnostics identify file and invalid field.
+- [ ] `sudo make test` passes.
+- [ ] New loader tests cover socket JSON fields, JSON escaping, and report
+  generation.
 
 ## Acceptance Criteria
 
