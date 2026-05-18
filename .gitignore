@@ -37,6 +37,10 @@ __pycache__/
 .venv/
 venv/
 
+# Experiment outputs
+experiments/results/*
+!experiments/results/.gitkeep
+
 # CMake build trees
 /cmake-build-*/
 /CMakeFiles/

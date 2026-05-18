@@ -22,7 +22,10 @@ LOADER_SRCS := \
 	loader/unix_socket_server.c
 LOADER_OBJS := $(patsubst loader/%.c,$(BUILD_DIR)/%.o,$(LOADER_SRCS))
 
-.PHONY: all clean distclean run unload test vmlinux
+.PHONY: all clean distclean run unload test vmlinux \
+	experiment-env experiment-preflight experiment-latency \
+	experiment-hit-ratio experiment-lpm experiment-reload \
+	experiment-e2e experiment-all experiment-analyze
 
 all: $(TARGET)
 
@@ -60,6 +63,46 @@ test: $(TARGET)
 	./tests/test_metrics_snapshot.sh
 	./tests/test_atomic_reload.sh
 	./tests/test_agent_scope.sh
+
+experiment-env:
+	@ts=$$(date +%Y%m%d_%H%M%S); \
+	dir=experiments/results/$${ts}_env; \
+	mkdir -p "$${dir}"; \
+	experiments/scripts/collect_env.sh "$${dir}" policies; \
+	echo "$${dir}"
+
+experiment-preflight:
+	experiments/scripts/preflight_check.sh
+
+experiment-latency:
+	experiments/scripts/run_latency_benchmark.sh
+
+experiment-hit-ratio:
+	experiments/scripts/run_hit_ratio_benchmark.sh
+
+experiment-lpm:
+	experiments/scripts/run_lpm_trie_benchmark.sh
+
+experiment-reload:
+	experiments/scripts/run_reload_benchmark.sh
+
+experiment-e2e:
+	experiments/scripts/run_end_to_end_benchmark.sh
+
+experiment-all:
+	experiments/scripts/run_all.sh
+
+experiment-analyze:
+	@if [ -z "$${RESULT_DIR:-}" ]; then \
+		latest=$$(find experiments/results -mindepth 1 -maxdepth 1 -type d | sort | tail -n 1); \
+	else \
+		latest="$${RESULT_DIR}"; \
+	fi; \
+	if [ -z "$${latest}" ]; then \
+		echo "no experiment result directory found" >&2; exit 1; \
+	fi; \
+	python3 experiments/tools/analyze_results.py "$${latest}"; \
+	echo "$${latest}/report.md"
 
 unload:
 	sudo pkill -INT -x $(TARGET) || true
