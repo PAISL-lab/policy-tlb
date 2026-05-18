@@ -208,9 +208,9 @@ static __always_inline int mcp_l3_path_trie_decide(__u32 hook_id,
 	if (!path || !path[0])
 		goto default_action;
 
-	key.prefixlen = 32 + MCP_GUARD_PATH_LEN * 8;
+	key.prefixlen = 32 + MCP_GUARD_PATH_LPM_LEN * 8;
 	key.generation = cfg ? cfg->active_generation : 0;
-	for (__u32 i = 0; i < MCP_GUARD_PATH_LEN; i++) {
+	for (__u32 i = 0; i < MCP_GUARD_PATH_LPM_LEN; i++) {
 		key.path[i] = path[i];
 		if (!path[i])
 			break;

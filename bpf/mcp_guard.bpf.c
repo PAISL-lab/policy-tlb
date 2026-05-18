@@ -35,9 +35,7 @@ static __always_inline int mcp_recorded_action_ret(__u32 hook_id,
 
 static __always_inline int mcp_tail_fail_ret(void)
 {
-	if (mcp_l2_policy_flags() & MCP_GUARD_POLICY_F_DENY_TAILCALL_FAIL)
-		return -MCP_GUARD_DENY_ERRNO;
-	return 0;
+	return -MCP_GUARD_DENY_ERRNO;
 }
 
 static __always_inline void mcp_set_tail_start(__u64 start_ns)

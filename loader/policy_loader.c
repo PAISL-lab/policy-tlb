@@ -1071,7 +1071,7 @@ static int clear_resource_generation(int fd, __u32 generation)
 
 static __u32 path_prefix_bits(const char *path)
 {
-	return 32 + (__u32)strnlen(path, MCP_GUARD_PATH_LEN) * 8;
+	return 32 + (__u32)strnlen(path, MCP_GUARD_PATH_LPM_LEN) * 8;
 }
 
 static __u32 command_prefix_bits(const char *command)
@@ -1127,7 +1127,7 @@ static int write_path_trie(int path_trie_fd, const struct policy_load_state *sta
 
 		key.prefixlen = path_prefix_bits(rule->value);
 		key.generation = generation;
-		snprintf(key.path, sizeof(key.path), "%s", rule->value);
+		memcpy(key.path, rule->value, strnlen(rule->value, sizeof(key.path)));
 
 		value.enabled = rule->enabled;
 		value.rule_id = rule->rule_id;

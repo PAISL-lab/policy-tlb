@@ -40,7 +40,7 @@ struct mcp_policy_rule {
 struct mcp_path_lpm_key {
 	__u32 prefixlen;
 	__u32 generation;
-	char path[MCP_GUARD_PATH_LEN];
+	char path[MCP_GUARD_PATH_LPM_LEN];
 };
 
 struct mcp_path_policy_value {
