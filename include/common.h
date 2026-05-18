@@ -50,6 +50,13 @@ enum mcp_guard_action {
 	MCP_GUARD_ACTION_UNSET = 255,
 };
 
+static inline int mcp_guard_action_valid(__u32 action)
+{
+	return action == MCP_GUARD_ACTION_ALLOW ||
+	       action == MCP_GUARD_ACTION_DENY ||
+	       action == MCP_GUARD_ACTION_AUDIT;
+}
+
 enum mcp_guard_hook {
 	MCP_GUARD_HOOK_EXEC = 1,
 	MCP_GUARD_HOOK_FILE_OPEN = 2,

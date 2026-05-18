@@ -16,6 +16,8 @@ static __always_inline int mcp_policy_default_action(void)
 
 	if (!cfg)
 		return MCP_GUARD_ACTION_ALLOW;
+	if (!mcp_guard_action_valid(cfg->default_action))
+		return MCP_GUARD_ACTION_DENY;
 	return cfg->default_action;
 }
 
@@ -62,17 +64,20 @@ static __always_inline int mcp_scope_matches(void)
 
 	scope = bpf_map_lookup_elem(&scope_pid, &pid);
 	if (scope && scope->profile_id == cfg->profile_id &&
-	    scope->agent_id == cfg->agent_id)
+	    scope->agent_id == cfg->agent_id &&
+	    scope->selector_type == MCP_GUARD_SCOPE_SELECTOR_PID)
 		return 1;
 	scope = bpf_map_lookup_elem(&scope_tgid, &tgid);
 	if (scope && scope->profile_id == cfg->profile_id &&
-	    scope->agent_id == cfg->agent_id)
+	    scope->agent_id == cfg->agent_id &&
+	    scope->selector_type == MCP_GUARD_SCOPE_SELECTOR_TGID)
 		return 1;
 
 	bpf_get_current_comm(&comm_key.comm, sizeof(comm_key.comm));
 	scope = bpf_map_lookup_elem(&scope_comm, &comm_key);
 	return scope && scope->profile_id == cfg->profile_id &&
-	       scope->agent_id == cfg->agent_id;
+	       scope->agent_id == cfg->agent_id &&
+	       scope->selector_type == MCP_GUARD_SCOPE_SELECTOR_COMM;
 }
 
 static __always_inline __u32 mcp_metric_index(__u32 hook_id,
@@ -205,6 +210,8 @@ static __always_inline int mcp_l3_path_trie_decide(__u32 hook_id,
 		*rule_id = rule->rule_id;
 	if (rule_name)
 		mcp_copy_rule_name_from_path_value(rule_name, rule);
+	if (!mcp_guard_action_valid(rule->action))
+		return MCP_GUARD_ACTION_DENY;
 	return rule->action;
 
 default_action:
@@ -244,6 +251,8 @@ static __always_inline int mcp_l3_command_trie_decide(__u32 hook_id,
 		*rule_id = rule->rule_id;
 	if (rule_name)
 		mcp_copy_rule_name_from_indexed_value(rule_name, rule);
+	if (!mcp_guard_action_valid(rule->action))
+		return MCP_GUARD_ACTION_DENY;
 	return rule->action;
 
 default_action:
@@ -283,6 +292,8 @@ static __always_inline int mcp_l3_string_decide(__u32 rule_type,
 				*rule_id = rule->rule_id;
 			if (rule_name)
 				mcp_copy_rule_name(rule_name, rule);
+			if (!mcp_guard_action_valid(rule->action))
+				return MCP_GUARD_ACTION_DENY;
 			return rule->action;
 		}
 		if (!mcp_has_prefix(value, rule->value, rule->value_len))
@@ -292,6 +303,8 @@ static __always_inline int mcp_l3_string_decide(__u32 rule_type,
 			*rule_id = rule->rule_id;
 		if (rule_name)
 			mcp_copy_rule_name(rule_name, rule);
+		if (!mcp_guard_action_valid(rule->action))
+			return MCP_GUARD_ACTION_DENY;
 		return rule->action;
 	}
 
@@ -320,6 +333,8 @@ static __always_inline int mcp_l3_resource_decide(__u32 rule_type,
 			*rule_id = rule->rule_id;
 		if (rule_name)
 			mcp_copy_rule_name_from_indexed_value(rule_name, rule);
+		if (!mcp_guard_action_valid(rule->action))
+			return MCP_GUARD_ACTION_DENY;
 		return rule->action;
 	}
 
@@ -352,6 +367,8 @@ static __always_inline int mcp_l3_ipv4_decide(__u32 ipv4_addr,
 			*rule_id = rule->rule_id;
 		if (rule_name)
 			mcp_copy_rule_name_from_indexed_value(rule_name, rule);
+		if (!mcp_guard_action_valid(rule->action))
+			return MCP_GUARD_ACTION_DENY;
 		return rule->action;
 	}
 
@@ -400,6 +417,7 @@ static __always_inline void mcp_emit_event(__u32 hook_id,
 	event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
 	if (!event)
 		return;
+	__builtin_memset(event, 0, sizeof(*event));
 
 	now_ns = bpf_ktime_get_ns();
 	event->ts_ns = now_ns;

@@ -10,11 +10,15 @@ char LICENSE[] SEC("license") = "GPL";
 
 static __always_inline int mcp_should_block(__u32 action)
 {
+	if (!mcp_guard_action_valid(action))
+		return 1;
 	return action == MCP_GUARD_ACTION_DENY && mcp_policy_enforced();
 }
 
 static __always_inline int mcp_action_ret(__u32 action)
 {
+	if (!mcp_guard_action_valid(action))
+		return -MCP_GUARD_DENY_ERRNO;
 	if (mcp_should_block(action))
 		return -MCP_GUARD_DENY_ERRNO;
 	return 0;
@@ -31,7 +35,9 @@ static __always_inline int mcp_recorded_action_ret(__u32 hook_id,
 
 static __always_inline int mcp_tail_fail_ret(void)
 {
-	return -MCP_GUARD_DENY_ERRNO;
+	if (mcp_l2_policy_flags() & MCP_GUARD_POLICY_F_DENY_TAILCALL_FAIL)
+		return -MCP_GUARD_DENY_ERRNO;
+	return 0;
 }
 
 static __always_inline void mcp_set_tail_start(__u64 start_ns)

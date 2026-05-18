@@ -37,6 +37,8 @@ static __always_inline int mcp_l1_lookup(const struct mcp_cache_key *key,
 	value = bpf_map_lookup_elem(&l1_cache, key);
 	if (!value || value->epoch != epoch)
 		return MCP_GUARD_ACTION_UNSET;
+	if (!mcp_guard_action_valid(value->action))
+		return MCP_GUARD_ACTION_UNSET;
 
 	if (out)
 		*out = *value;
@@ -50,6 +52,9 @@ static __always_inline void mcp_l1_store(const struct mcp_cache_key *key,
 					 __u32 reason)
 {
 	struct mcp_cache_value value = {};
+
+	if (!key || !key->resource_id || !mcp_guard_action_valid(action))
+		return;
 
 	value.epoch = mcp_current_epoch();
 	value.action = action;
