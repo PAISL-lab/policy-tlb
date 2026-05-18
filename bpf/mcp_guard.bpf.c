@@ -240,16 +240,29 @@ int BPF_PROG(mcp_guard_bprm_check_security_l2, struct linux_binprm *bprm, int re
 SEC("lsm/bprm_check_security")
 int BPF_PROG(mcp_guard_bprm_check_security_l3, struct linux_binprm *bprm, int ret)
 {
-	struct mcp_scratch *scratch = mcp_get_scratch();
+	struct mcp_scratch *scratch;
 	struct mcp_cache_key key = {};
-	__u64 resource_id;
+	__u64 resource_id = 0;
 	__u64 start_ns = mcp_get_tail_start();
 	__u32 rule_id = 0;
-	__u32 reason;
+	__u32 reason = MCP_GUARD_REASON_DEFAULT;
 	int action;
 
 	if (ret)
 		return ret;
+
+	if (!mcp_policy_has_rules()) {
+		action = mcp_policy_default_action();
+		if (action == MCP_GUARD_ACTION_ALLOW) {
+			resource_id = mcp_bprm_resource_id(bprm, 0);
+			mcp_fill_cache_key(&key, MCP_GUARD_HOOK_EXEC, resource_id);
+			mcp_l1_store(&key, action, 0, 0, reason);
+			return mcp_recorded_action_ret(MCP_GUARD_HOOK_EXEC, action,
+						       MCP_GUARD_LAYER_L3, start_ns);
+		}
+	}
+
+	scratch = mcp_get_scratch();
 	if (!scratch)
 		return mcp_tail_fail_ret();
 
@@ -335,16 +348,29 @@ int BPF_PROG(mcp_guard_file_open_l2, struct file *file, int ret)
 SEC("lsm/file_open")
 int BPF_PROG(mcp_guard_file_open_l3, struct file *file, int ret)
 {
-	struct mcp_scratch *scratch = mcp_get_scratch();
+	struct mcp_scratch *scratch;
 	struct mcp_cache_key key = {};
 	__u64 resource_id = mcp_file_resource_id(file);
 	__u64 start_ns = mcp_get_tail_start();
 	__u32 rule_id = 0;
-	__u32 reason;
+	__u32 reason = MCP_GUARD_REASON_DEFAULT;
 	int action;
 
 	if (ret)
 		return ret;
+
+	if (!mcp_policy_has_rules()) {
+		action = mcp_policy_default_action();
+		if (action == MCP_GUARD_ACTION_ALLOW) {
+			mcp_fill_cache_key(&key, MCP_GUARD_HOOK_FILE_OPEN, resource_id);
+			mcp_l1_store(&key, action, 0, 0, reason);
+			mcp_cache_file_followups(resource_id, action, 0, reason);
+			return mcp_recorded_action_ret(MCP_GUARD_HOOK_FILE_OPEN, action,
+						       MCP_GUARD_LAYER_L3, start_ns);
+		}
+	}
+
+	scratch = mcp_get_scratch();
 	if (!scratch)
 		return mcp_tail_fail_ret();
 
@@ -437,22 +463,34 @@ int BPF_PROG(mcp_guard_file_permission_l2, struct file *file, int mask, int ret)
 SEC("lsm/file_permission")
 int BPF_PROG(mcp_guard_file_permission_l3, struct file *file, int mask, int ret)
 {
-	struct mcp_scratch *scratch = mcp_get_scratch();
+	struct mcp_scratch *scratch;
 	struct mcp_cache_key key = {};
 	__u64 resource_id = mcp_file_resource_id(file);
 	__u64 start_ns = mcp_get_tail_start();
 	__u32 hook_id = MCP_GUARD_HOOK_FILE_READ;
 	__u32 rule_id = 0;
-	__u32 reason;
+	__u32 reason = MCP_GUARD_REASON_DEFAULT;
 	int action;
 
 	if (ret)
 		return ret;
-	if (!scratch)
-		return mcp_tail_fail_ret();
 
 	if (mask & (MCP_GUARD_MAY_WRITE | MCP_GUARD_MAY_APPEND))
 		hook_id = MCP_GUARD_HOOK_FILE_WRITE;
+
+	if (!mcp_policy_has_rules()) {
+		action = mcp_policy_default_action();
+		if (action == MCP_GUARD_ACTION_ALLOW) {
+			mcp_fill_cache_key(&key, hook_id, resource_id);
+			mcp_l1_store(&key, action, 0, 0, reason);
+			return mcp_recorded_action_ret(hook_id, action,
+						       MCP_GUARD_LAYER_L3, start_ns);
+		}
+	}
+
+	scratch = mcp_get_scratch();
+	if (!scratch)
+		return mcp_tail_fail_ret();
 
 	scratch->rule_name[0] = 0;
 	action = mcp_l3_resource_decide(MCP_GUARD_RULE_PATH_PREFIX,
@@ -546,7 +584,7 @@ SEC("lsm/socket_connect")
 int BPF_PROG(mcp_guard_socket_connect_l3, struct socket *sock, struct sockaddr *address,
 	     int addrlen, int ret)
 {
-	struct mcp_scratch *scratch = mcp_get_scratch();
+	struct mcp_scratch *scratch;
 	struct mcp_cache_key key = {};
 	__u16 family = 0;
 	__u16 port = 0;
@@ -562,6 +600,16 @@ int BPF_PROG(mcp_guard_socket_connect_l3, struct socket *sock, struct sockaddr *
 
 	if (ret)
 		return ret;
+
+	if (!mcp_policy_has_rules()) {
+		action = mcp_policy_default_action();
+		if (action == MCP_GUARD_ACTION_ALLOW)
+			return mcp_recorded_action_ret(
+				MCP_GUARD_HOOK_SOCKET_CONNECT, action,
+				MCP_GUARD_LAYER_L3, start_ns);
+	}
+
+	scratch = mcp_get_scratch();
 	if (!scratch)
 		return mcp_tail_fail_ret();
 

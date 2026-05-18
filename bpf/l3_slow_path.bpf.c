@@ -21,6 +21,20 @@ static __always_inline int mcp_policy_default_action(void)
 	return cfg->default_action;
 }
 
+static __always_inline __u32 mcp_policy_rule_count(void)
+{
+	struct mcp_policy_config *cfg = mcp_config();
+
+	if (!cfg)
+		return 0;
+	return cfg->rule_count;
+}
+
+static __always_inline int mcp_policy_has_rules(void)
+{
+	return mcp_policy_rule_count() != 0;
+}
+
 static __always_inline int mcp_policy_enforced(void)
 {
 	struct mcp_policy_config *cfg = mcp_config();
@@ -189,6 +203,8 @@ static __always_inline int mcp_l3_path_trie_decide(__u32 hook_id,
 	struct mcp_policy_config *cfg = mcp_config();
 	__u32 hook_mask = mcp_guard_hook_mask(hook_id);
 
+	if (!cfg || !cfg->rule_count)
+		goto default_action;
 	if (!path || !path[0])
 		goto default_action;
 
@@ -230,6 +246,8 @@ static __always_inline int mcp_l3_command_trie_decide(__u32 hook_id,
 	struct mcp_policy_config *cfg = mcp_config();
 	__u32 hook_mask = mcp_guard_hook_mask(hook_id);
 
+	if (!cfg || !cfg->rule_count)
+		goto default_action;
 	if (!value || !value[0])
 		goto default_action;
 
@@ -270,6 +288,8 @@ static __always_inline int mcp_l3_string_decide(__u32 rule_type,
 {
 	__u32 hook_mask = mcp_guard_hook_mask(hook_id);
 
+	if (!mcp_policy_has_rules())
+		goto default_action;
 	if (rule_type == MCP_GUARD_RULE_PATH_PREFIX)
 		return mcp_l3_path_trie_decide(hook_id, value, resource_id,
 					       rule_id, rule_name);
@@ -308,6 +328,7 @@ static __always_inline int mcp_l3_string_decide(__u32 rule_type,
 		return rule->action;
 	}
 
+default_action:
 	if (rule_id)
 		*rule_id = 0;
 	return mcp_policy_default_action();
@@ -324,6 +345,9 @@ static __always_inline int mcp_l3_resource_decide(__u32 rule_type,
 	struct mcp_policy_config *cfg = mcp_config();
 	__u32 hook_mask = mcp_guard_hook_mask(hook_id);
 
+	if (!cfg || !cfg->rule_count)
+		goto default_action;
+
 	key.generation = cfg ? cfg->active_generation : 0;
 	key.rule_type = rule_type;
 	key.resource_id = resource_id;
@@ -338,6 +362,7 @@ static __always_inline int mcp_l3_resource_decide(__u32 rule_type,
 		return rule->action;
 	}
 
+default_action:
 	if (rule_id)
 		*rule_id = 0;
 	return mcp_policy_default_action();
@@ -352,6 +377,9 @@ static __always_inline int mcp_l3_ipv4_decide(__u32 ipv4_addr,
 	struct mcp_indexed_policy_value *rule;
 	struct mcp_policy_config *cfg = mcp_config();
 	__u32 hook_mask = mcp_guard_hook_mask(MCP_GUARD_HOOK_SOCKET_CONNECT);
+
+	if (!cfg || !cfg->rule_count)
+		goto default_action;
 
 	key.prefixlen = 32 + 32 + 32;
 	key.generation = cfg ? cfg->active_generation : 0;
@@ -372,6 +400,7 @@ static __always_inline int mcp_l3_ipv4_decide(__u32 ipv4_addr,
 		return rule->action;
 	}
 
+default_action:
 	if (rule_id)
 		*rule_id = 0;
 	return mcp_policy_default_action();
