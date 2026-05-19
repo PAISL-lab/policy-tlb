@@ -754,6 +754,15 @@ GUI work:
 These documents define the loader/GUI split, socket event contract, development
 tasks, and acceptance criteria so separate developers can work in parallel.
 
+## License
+
+This project is licensed under the Apache License, Version 2.0. See
+`LICENSE`.
+
+The BPF object declaration `char LICENSE[] SEC("license") = "GPL"` is kernel
+verifier metadata used for BPF program loading and helper compatibility. It is
+not the repository-level license statement.
+
 ## Safety Note
 
 This is an experimental security framework. It attaches BPF LSM programs and can

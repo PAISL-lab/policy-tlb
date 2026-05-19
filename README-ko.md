@@ -748,6 +748,15 @@ GUI 작업:
 이 문서들은 loader/GUI 분리, socket event contract, 개발 task, acceptance
 criteria를 정의해 여러 개발자가 병렬로 작업할 수 있게 합니다.
 
+## 라이선스
+
+이 프로젝트는 Apache License, Version 2.0으로 배포됩니다. 자세한 내용은
+`LICENSE`를 참고하세요.
+
+BPF object의 `char LICENSE[] SEC("license") = "GPL"` 선언은 BPF program
+loading과 helper compatibility를 위한 커널 verifier metadata입니다. 저장소
+전체의 프로젝트 라이선스 표기가 아닙니다.
+
 ## 안전 주의
 
 이 프로젝트는 실험적 보안 프레임워크입니다. BPF LSM program을 attach하고 실제
