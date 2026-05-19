@@ -572,6 +572,66 @@ Sample output:
 [deny] pid=15263 uid=0 hook=exec layer=L3 duration_ns=3887 duration_us=3.887 model_us=0.989 delta_us=2.898 rule=1 error=13 path=/usr/bin/true rule=test-true
 ```
 
+## Controlled Experiments
+
+The repository includes a controlled experiment harness under `experiments/` for
+paper-oriented evaluation. It separates eBPF hook-internal policy latency from
+end-to-end workload overhead.
+
+Default experiment settings:
+
+```text
+EXPERIMENT_REPEATS=30
+EXPERIMENT_EVENTS_PER_RUN=100000
+EXPERIMENT_WARMUP_RUNS=3
+EXPERIMENT_CPU_CORE=2
+```
+
+Run the full suite:
+
+```bash
+sudo make experiment-preflight
+sudo make experiment-all
+```
+
+Run individual experiments:
+
+```bash
+sudo make experiment-latency
+sudo make experiment-hit-ratio
+sudo make experiment-lpm
+sudo make experiment-reload
+sudo make experiment-e2e
+```
+
+Clean stale experiment state before rerunning after interruption:
+
+```bash
+sudo experiments/scripts/clean_experiment_state.sh
+```
+
+Each experiment writes raw logs, parsed metrics, CSV tables, environment
+metadata, and a report under `experiments/results/`. Result directories are
+ignored by git.
+
+Validated reference results from a controlled local run:
+
+| Claim | Result |
+|---|---:|
+| `file_open` L1 vs L3 average latency | `80.10ns` vs `1860.28ns` (`23.22x`) |
+| `file_read` L1 vs L3 average latency | `70.80ns` vs `1680.20ns` (`23.73x`) |
+| `file_write` L1 vs L3 average latency | `75.99ns` vs `1758.25ns` (`23.14x`) |
+| `file_open` L1 hit ratio | `99.9056%` |
+| `file_read` L1 hit ratio | `99.9976%` |
+| `file_write` L1 hit ratio | `99.9996%` |
+| Atomic reload / rollback | `30/30` successful runs |
+| End-to-end guard-on overhead | `6.234%` |
+
+Use these numbers as a reference for the same machine and configuration, not as
+portable constants. The environment collector records kernel, compiler, BPF JIT,
+CPU governor, load average, git commit, and policy hashes so runs can be
+reported with their measurement context.
+
 ## Timing Interpretation
 
 The implementation emits timing data for deny/audit events.
