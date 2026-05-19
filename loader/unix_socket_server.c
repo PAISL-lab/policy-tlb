@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 #include "unix_socket_server.h"
 
 #include <errno.h>

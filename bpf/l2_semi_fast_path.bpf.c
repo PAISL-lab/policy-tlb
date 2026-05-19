@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 #ifndef MCP_GUARD_L2_SEMI_FAST_PATH_BPF_C
 #define MCP_GUARD_L2_SEMI_FAST_PATH_BPF_C
 

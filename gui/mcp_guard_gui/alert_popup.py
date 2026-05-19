@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 

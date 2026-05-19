@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 CLANG ?= clang
 CC ?= cc
 BPFTOOL ?= bpftool

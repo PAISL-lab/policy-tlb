@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 #ifndef MCP_GUARD_COMMON_H
 #define MCP_GUARD_COMMON_H
 

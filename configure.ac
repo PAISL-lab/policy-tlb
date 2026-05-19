@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 AC_INIT([mcp-guard], [0.1.0], [https://github.com/PAISL-lab/mcp-ebpf-guard/issues])
 AC_CONFIG_SRCDIR([loader/main.c])
 AC_CONFIG_FILES([config.mk])
