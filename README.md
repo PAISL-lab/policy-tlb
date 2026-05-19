@@ -614,6 +614,27 @@ Each experiment writes raw logs, parsed metrics, CSV tables, environment
 metadata, and a report under `experiments/results/`. Result directories are
 ignored by git.
 
+### Variable Control
+
+The experiment harness fixes or records the main variables needed for
+paper-quality interpretation:
+
+- same git commit, build flags, policy files, and workload event counts
+- same root privilege, temp directory base, loopback target, and measurement
+  scripts
+- CPU core pinning through `taskset` when available
+- CPU governor, kernel version, compiler versions, BPF JIT status, load
+  average, thermal hints, and policy hashes captured under each result's `env/`
+  directory
+- warm-up runs separated from measured runs
+- hook-internal latency measured separately from end-to-end workload time
+
+General-purpose Linux cannot perfectly eliminate scheduler activity,
+interrupts, cache state, thermal behavior, or background daemons. The harness
+therefore fixes controllable variables and records the remaining environment so
+results can be interpreted with that context. See
+`experiments/VARIABLE_CONTROL.md` for the full variable-control protocol.
+
 Validated reference results from a controlled local run:
 
 | Claim | Result |
