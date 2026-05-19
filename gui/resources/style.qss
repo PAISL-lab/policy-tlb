@@ -1,27 +1,120 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 QMainWindow {
-    background: #f6f7f9;
+    background: #f4f6f8;
 }
 
 QTabWidget::pane {
-    border: 1px solid #d8dde6;
+    border: 1px solid #d7dce3;
     background: #ffffff;
+}
+
+QTabBar::tab {
+    background: #eef2f6;
+    border: 1px solid #d7dce3;
+    border-bottom: 0;
+    padding: 8px 16px;
+    color: #374151;
+}
+
+QTabBar::tab:selected {
+    background: #ffffff;
+    color: #111827;
+    font-weight: 600;
+}
+
+QGroupBox {
+    background: #ffffff;
+    border: 1px solid #d7dce3;
+    border-radius: 6px;
+    margin-top: 18px;
+    padding: 12px;
+    font-weight: 600;
+}
+
+QGroupBox::title {
+    subcontrol-origin: margin;
+    left: 10px;
+    padding: 0 4px;
+    color: #111827;
+}
+
+QFrame#cardBand {
+    background: #e9edf2;
+    border: 1px solid #d7dce3;
+    border-radius: 6px;
+}
+
+QFrame#statCard {
+    background: #ffffff;
+    border: 1px solid #d7dce3;
+    border-radius: 6px;
+}
+
+QLabel#statTitle,
+QLabel#filterLabel {
+    color: #5b6472;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+QLabel#statCaption {
+    color: #6b7280;
+    font-size: 11px;
+}
+
+QLabel#statValue {
+    color: #111827;
+    font-size: 22px;
+    font-weight: 700;
+}
+
+QLabel#denyValue {
+    color: #b42318;
+    font-size: 22px;
+    font-weight: 700;
+}
+
+QLabel#statePill {
+    background: #e7f0ff;
+    color: #174ea6;
+    border: 1px solid #bfd4ff;
+    border-radius: 6px;
+    padding: 3px 8px;
+    font-weight: 600;
+}
+
+QFrame#filterBar {
+    background: #f8fafc;
+    border: 1px solid #d7dce3;
+    border-radius: 6px;
+}
+
+QComboBox,
+QLineEdit {
+    background: #ffffff;
+    border: 1px solid #cfd6df;
+    border-radius: 5px;
+    padding: 5px 7px;
+    color: #111827;
 }
 
 QTableView {
     background: #ffffff;
-    alternate-background-color: #f3f6fa;
-    gridline-color: #e1e6ef;
-    selection-background-color: #d9e8ff;
+    alternate-background-color: #f7f9fb;
+    gridline-color: #e5e9f0;
+    selection-background-color: #dbeafe;
     selection-color: #111827;
+    border: 1px solid #d7dce3;
 }
 
 QHeaderView::section {
-    background: #eef2f7;
+    background: #eef2f6;
     border: 0;
-    border-right: 1px solid #d8dde6;
-    padding: 6px;
+    border-right: 1px solid #d7dce3;
+    border-bottom: 1px solid #d7dce3;
+    padding: 7px;
     font-weight: 600;
+    color: #374151;
 }
 
 QLabel {
@@ -31,11 +124,13 @@ QLabel {
 QPlainTextEdit {
     background: #ffffff;
     color: #111827;
-    border: 1px solid #d8dde6;
+    border: 1px solid #d7dce3;
+    border-radius: 6px;
+    padding: 8px;
     font-family: monospace;
 }
 
 QStatusBar {
-    background: #eef2f7;
+    background: #eef2f6;
     color: #374151;
 }

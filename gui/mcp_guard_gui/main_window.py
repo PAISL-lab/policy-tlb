@@ -9,8 +9,10 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFormLayout,
+    QFrame,
     QGridLayout,
     QGroupBox,
+    QHeaderView,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -64,6 +66,18 @@ class MainWindow(QMainWindow):
         self.metrics_summary_label = QLabel("No metrics snapshot")
         self.reload_label = QLabel("No reload result")
         self.error_label = QLabel("")
+        for label in (
+            self.total_label,
+            self.deny_label,
+            self.audit_label,
+            self.epoch_label,
+            self.avg_latency_label,
+        ):
+            label.setObjectName("statValue")
+        self.deny_label.setObjectName("denyValue")
+        self.connection_dashboard_label.setObjectName("statePill")
+        self.connection_runtime_label.setObjectName("statePill")
+        self.connection_status_label.setObjectName("statePill")
         self.popup_toggle = QCheckBox("Deny popups")
         self.popup_toggle.setChecked(popups_enabled)
         self.popup_toggle.toggled.connect(self._toggle_popups)
@@ -79,10 +93,31 @@ class MainWindow(QMainWindow):
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.selectionModel().selectionChanged.connect(self._selection_changed)
         self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setDefaultSectionSize(30)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        for column, width in enumerate((86, 78, 132, 62, 96, 70, 76, 70, 320, 160)):
+            self.table.setColumnWidth(column, width)
+
+        self.dashboard_table = QTableView()
+        self.dashboard_table.setModel(self.model)
+        self.dashboard_table.setAlternatingRowColors(True)
+        self.dashboard_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.dashboard_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.dashboard_table.verticalHeader().setVisible(False)
+        self.dashboard_table.verticalHeader().setDefaultSectionSize(28)
+        self.dashboard_table.horizontalHeader().setStretchLastSection(True)
+        self.dashboard_table.setColumnWidth(0, 86)
+        self.dashboard_table.setColumnWidth(1, 78)
+        self.dashboard_table.setColumnWidth(2, 132)
+        self.dashboard_table.setColumnWidth(8, 420)
+        for column in (4, 5, 6, 7):
+            self.dashboard_table.setColumnHidden(column, True)
 
         self.metrics_table = QTableWidget(0, 5)
         self.metrics_table.setHorizontalHeaderLabels(["Hook", "Layer", "Action", "Count", "Avg us"])
         self.metrics_table.horizontalHeader().setStretchLastSection(True)
+        self.metrics_table.verticalHeader().setVisible(False)
 
         self._build_ui()
         self._create_client(replay_path)
@@ -93,6 +128,7 @@ class MainWindow(QMainWindow):
 
     def _build_ui(self) -> None:
         tabs = QTabWidget()
+        tabs.setDocumentMode(True)
         tabs.addTab(self._dashboard_tab(), "Dashboard")
         tabs.addTab(self._events_tab(), "Events")
         tabs.addTab(self._metrics_tab(), "Metrics")
@@ -120,30 +156,47 @@ class MainWindow(QMainWindow):
     def _dashboard_tab(self) -> QWidget:
         tab = QWidget()
         layout = QVBoxLayout(tab)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(12)
         layout.addWidget(self._summary_panel())
-        layout.addWidget(self._layer_panel())
-        latest = QGroupBox("Latest high-risk event")
-        latest_layout = QVBoxLayout(latest)
-        latest_layout.addWidget(self.latest_label)
-        layout.addWidget(latest)
-        layout.addStretch(1)
+        lower = QHBoxLayout()
+        lower.addWidget(self._layer_panel(), 1)
+        lower.addWidget(self._latest_panel(), 2)
+        layout.addLayout(lower)
+        layout.addWidget(self._recent_panel(), 1)
         return tab
 
     def _summary_panel(self) -> QWidget:
-        box = QGroupBox("Runtime summary")
-        grid = QGridLayout(box)
-        labels = [
-            ("Connection", self.connection_dashboard_label),
-            ("Events", self.total_label),
-            ("Deny", self.deny_label),
-            ("Audit", self.audit_label),
-            ("Epoch", self.epoch_label),
-            ("Avg latency", self.avg_latency_label),
+        panel = QFrame()
+        panel.setObjectName("cardBand")
+        layout = QHBoxLayout(panel)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(10)
+        cards = [
+            ("Connection", self.connection_dashboard_label, "Live loader state"),
+            ("Events", self.total_label, "Recent buffered events"),
+            ("Denied", self.deny_label, "Policy blocks"),
+            ("Audit", self.audit_label, "Observed warnings"),
+            ("Epoch", self.epoch_label, "Latest policy epoch"),
+            ("Avg latency", self.avg_latency_label, "Event mean"),
         ]
-        for index, (title, widget) in enumerate(labels):
-            grid.addWidget(QLabel(title), index // 3 * 2, index % 3)
-            grid.addWidget(widget, index // 3 * 2 + 1, index % 3)
-        return box
+        for title, widget, caption in cards:
+            layout.addWidget(self._stat_card(title, widget, caption))
+        return panel
+
+    def _stat_card(self, title: str, value: QLabel, caption: str) -> QWidget:
+        card = QFrame()
+        card.setObjectName("statCard")
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(12, 10, 12, 10)
+        title_label = QLabel(title)
+        title_label.setObjectName("statTitle")
+        caption_label = QLabel(caption)
+        caption_label.setObjectName("statCaption")
+        card_layout.addWidget(title_label)
+        card_layout.addWidget(value)
+        card_layout.addWidget(caption_label)
+        return card
 
     def _layer_panel(self) -> QWidget:
         box = QGroupBox("Layer distribution")
@@ -151,21 +204,37 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.layer_label)
         return box
 
+    def _latest_panel(self) -> QWidget:
+        latest = QGroupBox("Latest high-risk event")
+        latest_layout = QVBoxLayout(latest)
+        latest_layout.addWidget(self.latest_label)
+        return latest
+
+    def _recent_panel(self) -> QWidget:
+        recent = QGroupBox("Recent events")
+        layout = QVBoxLayout(recent)
+        layout.addWidget(self.dashboard_table)
+        return recent
+
     def _events_tab(self) -> QWidget:
         tab = QWidget()
         layout = QVBoxLayout(tab)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
         layout.addWidget(self._filter_bar())
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(self.table)
         splitter.addWidget(self.detail)
-        splitter.setSizes([860, 420])
+        splitter.setSizes([930, 350])
         layout.addWidget(splitter)
         return tab
 
     def _filter_bar(self) -> QWidget:
-        bar = QWidget()
+        bar = QFrame()
+        bar.setObjectName("filterBar")
         layout = QHBoxLayout(bar)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(8)
         self.action_filter = self._combo(["all", "allow", "deny", "audit"])
         self.hook_filter = self._combo(
             ["all", "exec", "file_open", "file_read", "file_write", "socket_connect"]
@@ -177,6 +246,19 @@ class MainWindow(QMainWindow):
         self.agent_filter.setPlaceholderText("agent")
         self.search_filter = QLineEdit()
         self.search_filter.setPlaceholderText("search")
+        for label_text, widget in (
+            ("Action", self.action_filter),
+            ("Hook", self.hook_filter),
+            ("Layer", self.layer_filter),
+            ("Profile", self.profile_filter),
+            ("Agent", self.agent_filter),
+            ("Search", self.search_filter),
+        ):
+            label = QLabel(label_text)
+            label.setObjectName("filterLabel")
+            layout.addWidget(label)
+            layout.addWidget(widget)
+        layout.addStretch(1)
         for widget in (
             self.action_filter,
             self.hook_filter,
@@ -185,7 +267,7 @@ class MainWindow(QMainWindow):
             self.agent_filter,
             self.search_filter,
         ):
-            layout.addWidget(widget)
+            widget.setMinimumWidth(86)
         self.action_filter.currentTextChanged.connect(self._apply_filters)
         self.hook_filter.currentTextChanged.connect(self._apply_filters)
         self.layer_filter.currentTextChanged.connect(self._apply_filters)
@@ -202,6 +284,8 @@ class MainWindow(QMainWindow):
     def _metrics_tab(self) -> QWidget:
         tab = QWidget()
         layout = QVBoxLayout(tab)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(12)
         layout.addWidget(self.metrics_summary_label)
         layout.addWidget(self.metrics_table)
         return tab
@@ -209,6 +293,7 @@ class MainWindow(QMainWindow):
     def _runtime_tab(self) -> QWidget:
         tab = QWidget()
         layout = QVBoxLayout(tab)
+        layout.setContentsMargins(14, 14, 14, 14)
         form_box = QGroupBox("Runtime")
         form = QFormLayout(form_box)
         form.addRow("Socket", QLabel(self.socket_path))
