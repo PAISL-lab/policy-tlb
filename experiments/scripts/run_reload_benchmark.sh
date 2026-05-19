@@ -16,12 +16,16 @@ result_dir="${EXPERIMENT_RESULT_DIR:-${EXPERIMENT_RESULT_BASE}/${timestamp}_relo
 mkdir -p "${result_dir}"/{env,raw,parsed,tables,logs}
 trap 'mcp_exp_restore_result_owner "${result_dir}"' EXIT
 experiments/scripts/collect_env.sh "${result_dir}" "${MCP_GUARD_POLICY_DIR}"
+experiments/scripts/clean_experiment_state.sh >/dev/null 2>&1 || true
 make mcp-guard
 
 run_one() {
   local run_id="$1"
   local run_dir="${result_dir}/raw/$(printf "run_%03d" "${run_id}")"
   local start_ns end_ns rc
+  local start_sec elapsed_sec
+  start_sec="$(date +%s)"
+  echo "[reload] start run=${run_id}" >&2
   mkdir -p "${run_dir}"
   start_ns="$(date +%s%N)"
   rc=0
@@ -39,9 +43,13 @@ run_one() {
   echo "${rc}" >"${run_dir}/exit_status.txt"
   grep "hook=.*layer=.*count=" "${run_dir}/guard.log" >"${run_dir}/metrics.txt" || true
   python3 experiments/tools/parse_metrics.py "${run_dir}/guard.log" --run-id "${run_id}" --json-out "${run_dir}/metrics.json" --csv-out "${run_dir}/metrics.csv"
+  elapsed_sec=$(($(date +%s) - start_sec))
+  echo "[reload] done run=${run_id} elapsed=${elapsed_sec}s status=${rc}" >&2
   return "${rc}"
 }
 
+echo "[reload] result_dir=${result_dir}" >&2
+echo "[reload] repeats=${EXPERIMENT_REPEATS}" >&2
 for run_id in $(seq 1 "${EXPERIMENT_REPEATS}"); do
   run_one "${run_id}"
 done

@@ -6,17 +6,15 @@ if [[ ${EUID} -ne 0 ]]; then
 fi
 
 cd "$(dirname "$0")/.."
+source experiments/scripts/common.sh
 make -s mcp-guard
 
-tmpdir="$(mktemp -d)"
+tmpdir="$(mktemp -d /tmp/mcpguard-exp-reload-XXXXXX)"
 guard_pid=""
 
 cleanup() {
-  if [[ -n "${guard_pid}" ]] && kill -0 "${guard_pid}" 2>/dev/null; then
-    kill -INT "${guard_pid}" 2>/dev/null || true
-    wait "${guard_pid}" 2>/dev/null || true
-  fi
-  rm -rf "${tmpdir}"
+  mcp_exp_stop_guard_for_policy "${tmpdir}" "${guard_pid}"
+  mcp_exp_remove_tmpdir "${tmpdir}"
 }
 trap cleanup EXIT
 
@@ -44,6 +42,7 @@ JSON
 ./mcp-guard "${tmpdir}" > "${tmpdir}/guard.log" 2>&1 &
 guard_pid=$!
 sleep 1
+guard_pid="$(mcp_exp_guard_pids_for_policy "${tmpdir}" | head -1 || true)"
 
 if ! kill -0 "${guard_pid}" 2>/dev/null; then
   cat "${tmpdir}/guard.log"

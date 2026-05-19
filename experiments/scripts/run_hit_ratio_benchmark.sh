@@ -18,12 +18,10 @@ trap 'cleanup_active_guard; mcp_exp_restore_result_owner "${result_dir}"' EXIT
 experiments/scripts/collect_env.sh "${result_dir}" "${MCP_GUARD_POLICY_DIR}"
 make mcp-guard
 active_guard_pid=""
+active_guard_policy_dir=""
 
 cleanup_active_guard() {
-  if [[ -n "${active_guard_pid}" ]] && kill -0 "${active_guard_pid}" 2>/dev/null; then
-    kill -INT "${active_guard_pid}" 2>/dev/null || true
-    wait "${active_guard_pid}" 2>/dev/null || true
-  fi
+  mcp_exp_stop_guard_for_policy "${active_guard_policy_dir:-}" "${active_guard_pid:-}"
 }
 abort_experiment() {
   echo "[hit-ratio] interrupted; cleaning up" >&2
@@ -43,25 +41,12 @@ start_guard() {
   fi
   guard_pid=$!
   active_guard_pid="${guard_pid}"
+  active_guard_policy_dir="${policy_dir}"
 }
 
 stop_guard() {
   local pid="${1:-}"
-  [[ -n "${pid}" ]] || return 0
-
-  kill -INT "${pid}" 2>/dev/null || true
-  for _ in $(seq 1 20); do
-    if ! kill -0 "${pid}" 2>/dev/null; then
-      wait "${pid}" 2>/dev/null || true
-      return 0
-    fi
-    sleep 0.1
-  done
-
-  kill -TERM "${pid}" 2>/dev/null || true
-  sleep 0.2
-  kill -KILL "${pid}" 2>/dev/null || true
-  wait "${pid}" 2>/dev/null || true
+  mcp_exp_stop_guard_for_policy "${active_guard_policy_dir:-}" "${pid}"
 }
 
 make_empty_policy() {
@@ -102,12 +87,19 @@ run_one() {
       kill -INT "${guard_pid}" 2>/dev/null || true
       wait "${guard_pid}" 2>/dev/null || true
     fi
-    rm -rf "${tmpdir}"
+    mcp_exp_remove_tmpdir "${tmpdir}"
   }
   trap cleanup RETURN
 
   start_guard "${policy_dir}" "${run_dir}/guard.log"
   sleep 1
+  guard_pid="$(mcp_exp_guard_pids_for_policy "${policy_dir}" | head -1 || true)"
+  active_guard_pid="${guard_pid}"
+  if [[ -z "${guard_pid}" ]] || ! kill -0 "${guard_pid}" 2>/dev/null; then
+    cp "${run_dir}/guard.log" "${run_dir}/error.log"
+    echo "guard_start_failed" >"${run_dir}/exit_status.txt"
+    return 1
+  fi
   start_ns="$(date +%s%N)"
   rc=0
   echo "phase=workload_start ts=$(date -Iseconds)" >>"${run_dir}/phase.log"
@@ -120,6 +112,7 @@ run_one() {
   stop_guard "${guard_pid}"
   guard_pid=""
   active_guard_pid=""
+  active_guard_policy_dir=""
   echo "phase=guard_stop_done ts=$(date -Iseconds)" >>"${run_dir}/phase.log"
   {
     echo "benchmark=hit_ratio"

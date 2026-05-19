@@ -51,6 +51,9 @@ run_one() {
   run_name="$(printf "run_%03d" "${run_id}")"
   local run_dir="${result_dir}/raw/${run_name}"
   local tmpdir policy_dir guard_pid start_ns end_ns rc
+  local start_sec elapsed_sec
+  start_sec="$(date +%s)"
+  echo "[latency] start run=${run_id} events=${EXPERIMENT_EVENTS_PER_RUN}" >&2
   tmpdir="$(mktemp -d "${EXPERIMENT_TMP_BASE}/mcpguard-exp-latency-XXXXXX")"
   policy_dir="${tmpdir}/policies"
   mkdir -p "${run_dir}"
@@ -58,17 +61,15 @@ run_one() {
   make_policy_dir "${policy_dir}" "${tmpdir}/secret.txt"
 
   cleanup() {
-    if [[ -n "${guard_pid:-}" ]] && kill -0 "${guard_pid}" 2>/dev/null; then
-      kill -INT "${guard_pid}" 2>/dev/null || true
-      wait "${guard_pid}" 2>/dev/null || true
-    fi
-    rm -rf "${tmpdir}"
+    mcp_exp_stop_guard_for_policy "${policy_dir:-}" "${guard_pid:-}"
+    mcp_exp_remove_tmpdir "${tmpdir}"
   }
   trap cleanup RETURN
 
   run_cmd ./mcp-guard "${policy_dir}" >"${run_dir}/guard.log" 2>&1 &
   guard_pid=$!
   sleep 1
+  guard_pid="$(mcp_exp_guard_pids_for_policy "${policy_dir}" | head -1 || true)"
   if ! kill -0 "${guard_pid}" 2>/dev/null; then
     cp "${run_dir}/guard.log" "${run_dir}/error.log"
     echo "guard_start_failed" >"${run_dir}/exit_status.txt"
@@ -90,8 +91,7 @@ run_one() {
   } >"${run_dir}/workload.log" 2>&1 || rc=$?
   end_ns="$(date +%s%N)"
 
-  kill -INT "${guard_pid}" 2>/dev/null || true
-  wait "${guard_pid}" 2>/dev/null || true
+  mcp_exp_stop_guard_for_policy "${policy_dir}" "${guard_pid}"
   guard_pid=""
 
   {
@@ -104,13 +104,21 @@ run_one() {
   echo "${rc}" >"${run_dir}/exit_status.txt"
   grep "hook=.*layer=.*count=" "${run_dir}/guard.log" >"${run_dir}/metrics.txt" || true
   python3 experiments/tools/parse_metrics.py "${run_dir}/guard.log" --run-id "${run_id}" --json-out "${run_dir}/metrics.json" --csv-out "${run_dir}/metrics.csv"
+  elapsed_sec=$(($(date +%s) - start_sec))
+  echo "[latency] done run=${run_id} elapsed=${elapsed_sec}s status=${rc}" >&2
   return "${rc}"
 }
 
+original_events_per_run="${EXPERIMENT_EVENTS_PER_RUN}"
+echo "[latency] result_dir=${result_dir}" >&2
+echo "[latency] warmup_runs=${EXPERIMENT_WARMUP_RUNS} repeats=${EXPERIMENT_REPEATS} events=${original_events_per_run}" >&2
 for warm in $(seq 1 "${EXPERIMENT_WARMUP_RUNS}"); do
+  echo "[latency] warmup start run=${warm}" >&2
   EXPERIMENT_EVENTS_PER_RUN=100 run_one "${warm}" >/dev/null 2>&1 || true
   rm -rf "${result_dir}/raw/$(printf "run_%03d" "${warm}")"
+  echo "[latency] warmup done run=${warm}" >&2
 done
+EXPERIMENT_EVENTS_PER_RUN="${original_events_per_run}"
 
 for run_id in $(seq 1 "${EXPERIMENT_REPEATS}"); do
   run_one "${run_id}"

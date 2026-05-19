@@ -49,16 +49,16 @@ run_one() {
   local mode="$2"
   local run_dir="${result_dir}/raw/$(printf "run_%03d" "${run_id}")"
   local tmpdir policy_dir guard_pid start_ns end_ns rc
+  local start_sec elapsed_sec
+  start_sec="$(date +%s)"
+  echo "[e2e] start run=${run_id} mode=${mode} events=${EXPERIMENT_EVENTS_PER_RUN}" >&2
   tmpdir="$(mktemp -d "${EXPERIMENT_TMP_BASE}/mcpguard-exp-e2e-XXXXXX")"
   policy_dir="${tmpdir}/policies"
   mkdir -p "${run_dir}"
   make_empty_policy "${policy_dir}"
   cleanup() {
-    if [[ -n "${guard_pid:-}" ]] && kill -0 "${guard_pid}" 2>/dev/null; then
-      kill -INT "${guard_pid}" 2>/dev/null || true
-      wait "${guard_pid}" 2>/dev/null || true
-    fi
-    rm -rf "${tmpdir}"
+    mcp_exp_stop_guard_for_policy "${policy_dir:-}" "${guard_pid:-}"
+    mcp_exp_remove_tmpdir "${tmpdir}"
   }
   trap cleanup RETURN
 
@@ -67,6 +67,12 @@ run_one() {
     run_cmd ./mcp-guard "${policy_dir}" >"${run_dir}/guard.log" 2>&1 &
     guard_pid=$!
     sleep 1
+    guard_pid="$(mcp_exp_guard_pids_for_policy "${policy_dir}" | head -1 || true)"
+    if [[ -z "${guard_pid}" ]] || ! kill -0 "${guard_pid}" 2>/dev/null; then
+      cp "${run_dir}/guard.log" "${run_dir}/error.log"
+      echo "guard_start_failed" >"${run_dir}/exit_status.txt"
+      return 1
+    fi
   else
     : >"${run_dir}/guard.log"
   fi
@@ -81,8 +87,7 @@ run_one() {
   end_ns="$(date +%s%N)"
 
   if [[ -n "${guard_pid}" ]]; then
-    kill -INT "${guard_pid}" 2>/dev/null || true
-    wait "${guard_pid}" 2>/dev/null || true
+    mcp_exp_stop_guard_for_policy "${policy_dir}" "${guard_pid}"
     guard_pid=""
   fi
 
@@ -100,9 +105,13 @@ run_one() {
   echo "${rc}" >"${run_dir}/exit_status.txt"
   grep "hook=.*layer=.*count=" "${run_dir}/guard.log" >"${run_dir}/metrics.txt" || true
   python3 experiments/tools/parse_metrics.py "${run_dir}/guard.log" --run-id "${run_id}" --json-out "${run_dir}/metrics.json" --csv-out "${run_dir}/metrics.csv"
+  elapsed_sec=$(($(date +%s) - start_sec))
+  echo "[e2e] done run=${run_id} mode=${mode} elapsed=${elapsed_sec}s status=${rc}" >&2
   return "${rc}"
 }
 
+echo "[e2e] result_dir=${result_dir}" >&2
+echo "[e2e] repeats=${EXPERIMENT_REPEATS} events=${EXPERIMENT_EVENTS_PER_RUN} modes=guard_off,guard_on" >&2
 run_id=1
 for repeat in $(seq 1 "${EXPERIMENT_REPEATS}"); do
   run_one "${run_id}" guard_off
