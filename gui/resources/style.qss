@@ -29,9 +29,9 @@ QLabel {
 }
 
 QPlainTextEdit {
-    background: #101828;
-    color: #e5e7eb;
-    border: 1px solid #253044;
+    background: #ffffff;
+    color: #111827;
+    border: 1px solid #d8dde6;
     font-family: monospace;
 }
 

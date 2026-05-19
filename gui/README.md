@@ -22,12 +22,20 @@ python3 -m venv .venv
 pip install -r requirements.txt
 ```
 
-## Demo Mode
+## Replay Mode
 
 Run without the loader or root privileges:
 
 ```bash
-python3 run_gui.py --demo samples/events.ndjson
+python3 run_gui.py --replay samples/events.ndjson
+```
+
+Useful options:
+
+```bash
+python3 run_gui.py --replay samples/events.ndjson --no-popups
+python3 run_gui.py --max-events 1000
+python3 run_gui.py --socket /tmp/mcp-guard.sock
 ```
 
 ## Live Loader Mode
@@ -46,3 +54,10 @@ python3 run_gui.py
 ```
 
 The GUI connects to `/tmp/mcp-guard.sock` by default.
+
+## Troubleshooting
+
+- If live mode shows `disconnected`, start `mcp-guard` first and confirm
+  `/tmp/mcp-guard.sock` exists.
+- The GUI does not need `sudo`; only the loader needs privileges.
+- Use replay mode for UI work when BPF or the loader is not running.

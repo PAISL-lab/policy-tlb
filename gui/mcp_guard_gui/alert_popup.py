@@ -2,7 +2,7 @@
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
-from .models import GuardEvent
+from .models import EventRecord
 
 
 class AlertPopup(QWidget):
@@ -21,16 +21,40 @@ class AlertPopup(QWidget):
         self._timer.setSingleShot(True)
         self._timer.timeout.connect(self.hide)
 
-    def show_event(self, event: GuardEvent) -> None:
-        self._title.setText(f"{event.action.upper()} {event.hook} {event.layer}")
-        target = event.raw.get("path") or f"port {event.raw.get('port', '-')}"
+    def show_event(self, event: EventRecord, offset: int = 0, extra_count: int = 0) -> None:
+        suffix = f" (+{extra_count})" if extra_count else ""
+        self._title.setText(f"MCP Guard blocked an operation{suffix}")
         self._body.setText(
-            f"{target}\nrule={event.raw.get('rule', '-') or '-'} "
-            f"duration={event.duration_us:.3f}us"
+            "Denied by the active MCP Guard policy.\n"
+            f"{event.hook} {event.target}\n"
+            f"rule={event.rule} profile={event.profile_id} agent={event.agent_id} "
+            f"duration={event.duration_us:.3f} us"
         )
         if self.parentWidget():
             parent_rect = self.parentWidget().geometry()
-            self.move(parent_rect.right() - 360, parent_rect.top() + 72)
-        self.resize(340, 110)
+            self.move(parent_rect.right() - 380, parent_rect.top() + 72 + offset)
+        self.resize(360, 130)
         self.show()
-        self._timer.start(4500)
+        self._timer.start(5000)
+
+
+class AlertManager:
+    def __init__(self, parent: QWidget) -> None:
+        self.parent = parent
+        self.enabled = True
+        self._popups = [AlertPopup(parent) for _ in range(3)]
+        self._next_index = 0
+        self._suppressed = 0
+
+    def show_event(self, event: EventRecord) -> None:
+        if not self.enabled:
+            return
+        visible = [popup for popup in self._popups if popup.isVisible()]
+        if len(visible) >= len(self._popups):
+            self._suppressed += 1
+            visible[-1].show_event(event, offset=(len(visible) - 1) * 142, extra_count=self._suppressed)
+            return
+        self._suppressed = 0
+        popup = self._popups[self._next_index]
+        self._next_index = (self._next_index + 1) % len(self._popups)
+        popup.show_event(event, offset=len(visible) * 142)
