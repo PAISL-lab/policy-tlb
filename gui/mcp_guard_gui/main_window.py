@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMainWindow,
     QPlainTextEdit,
+    QProgressBar,
     QSplitter,
     QStatusBar,
     QTableWidget,
@@ -61,11 +62,30 @@ class MainWindow(QMainWindow):
         self.epoch_label = QLabel("0")
         self.avg_latency_label = QLabel("0.000 us")
         self.layer_label = QLabel("L1 0 / L2 0 / L3 0")
+        self.layer_bars: dict[str, QProgressBar] = {}
         self.latest_label = QLabel("-")
         self.latest_label.setWordWrap(True)
+        self.latest_action_label = QLabel("No high-risk event")
+        self.latest_action_label.setObjectName("riskAction")
+        self.latest_target_label = QLabel("-")
+        self.latest_target_label.setObjectName("riskTarget")
+        self.latest_meta_label = QLabel("Waiting for deny or audit events")
+        self.latest_meta_label.setObjectName("riskMeta")
+        self.latest_meta_label.setWordWrap(True)
+        self.posture_label = QLabel("Monitoring")
+        self.posture_label.setObjectName("posturePill")
         self.metrics_summary_label = QLabel("No metrics snapshot")
+        self.metrics_summary_label.setObjectName("metricsSummary")
         self.reload_label = QLabel("No reload result")
         self.error_label = QLabel("")
+        self.filter_count_label = QLabel("0 shown")
+        self.filter_count_label.setObjectName("filterCount")
+        self.filter_count_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.detail_heading = QLabel("Event details")
+        self.detail_heading.setObjectName("detailHeading")
+        self.detail_summary = QLabel("Select an event to inspect raw JSON and timing details.")
+        self.detail_summary.setObjectName("detailSummary")
+        self.detail_summary.setWordWrap(True)
         for label in (
             self.total_label,
             self.deny_label,
@@ -78,9 +98,17 @@ class MainWindow(QMainWindow):
         self.connection_dashboard_label.setObjectName("statePill")
         self.connection_runtime_label.setObjectName("statePill")
         self.connection_status_label.setObjectName("statePill")
+        for label in (
+            self.connection_dashboard_label,
+            self.connection_runtime_label,
+            self.connection_status_label,
+        ):
+            self._set_state_label(label, "disconnected")
         self.popup_toggle = QCheckBox("Deny popups")
-        self.popup_toggle.setChecked(popups_enabled)
-        self.popup_toggle.toggled.connect(self._toggle_popups)
+        self.runtime_popup_toggle = QCheckBox("Deny popups")
+        for toggle in (self.popup_toggle, self.runtime_popup_toggle):
+            toggle.setChecked(popups_enabled)
+            toggle.toggled.connect(self._toggle_popups)
 
         self.detail = QPlainTextEdit()
         self.detail.setReadOnly(True)
@@ -158,6 +186,7 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(tab)
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(12)
+        layout.addWidget(self._dashboard_header())
         layout.addWidget(self._summary_panel())
         lower = QHBoxLayout()
         lower.addWidget(self._layer_panel(), 1)
@@ -166,6 +195,24 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._recent_panel(), 1)
         return tab
 
+    def _dashboard_header(self) -> QWidget:
+        header = QFrame()
+        header.setObjectName("dashboardHeader")
+        layout = QHBoxLayout(header)
+        layout.setContentsMargins(18, 14, 18, 14)
+        title_col = QVBoxLayout()
+        title = QLabel("MCP Guard Runtime")
+        title.setObjectName("dashboardTitle")
+        subtitle = QLabel(f"Local enforcement telemetry / {self.socket_path}")
+        subtitle.setObjectName("dashboardSubtitle")
+        title_col.addWidget(title)
+        title_col.addWidget(subtitle)
+        layout.addLayout(title_col)
+        layout.addStretch(1)
+        layout.addWidget(self.posture_label)
+        layout.addWidget(self.popup_toggle)
+        return header
+
     def _summary_panel(self) -> QWidget:
         panel = QFrame()
         panel.setObjectName("cardBand")
@@ -173,20 +220,20 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(10)
         cards = [
-            ("Connection", self.connection_dashboard_label, "Live loader state"),
-            ("Events", self.total_label, "Recent buffered events"),
-            ("Denied", self.deny_label, "Policy blocks"),
-            ("Audit", self.audit_label, "Observed warnings"),
-            ("Epoch", self.epoch_label, "Latest policy epoch"),
-            ("Avg latency", self.avg_latency_label, "Event mean"),
+            ("Connection", self.connection_dashboard_label, "Live loader state", "statCard"),
+            ("Events", self.total_label, "Recent buffered events", "statCard"),
+            ("Denied", self.deny_label, "Policy blocks", "statCardDanger"),
+            ("Audit", self.audit_label, "Observed warnings", "statCardWarn"),
+            ("Epoch", self.epoch_label, "Latest policy epoch", "statCard"),
+            ("Avg latency", self.avg_latency_label, "Event mean", "statCard"),
         ]
-        for title, widget, caption in cards:
-            layout.addWidget(self._stat_card(title, widget, caption))
+        for title, widget, caption, object_name in cards:
+            layout.addWidget(self._stat_card(title, widget, caption, object_name))
         return panel
 
-    def _stat_card(self, title: str, value: QLabel, caption: str) -> QWidget:
+    def _stat_card(self, title: str, value: QLabel, caption: str, object_name: str) -> QWidget:
         card = QFrame()
-        card.setObjectName("statCard")
+        card.setObjectName(object_name)
         card_layout = QVBoxLayout(card)
         card_layout.setContentsMargins(12, 10, 12, 10)
         title_label = QLabel(title)
@@ -202,17 +249,36 @@ class MainWindow(QMainWindow):
         box = QGroupBox("Layer distribution")
         layout = QVBoxLayout(box)
         layout.addWidget(self.layer_label)
+        for layer in ("L1", "L2", "L3"):
+            row = QHBoxLayout()
+            label = QLabel(layer)
+            label.setObjectName("filterLabel")
+            bar = QProgressBar()
+            bar.setRange(0, 100)
+            bar.setTextVisible(True)
+            bar.setFormat("0%")
+            bar.setObjectName(f"layerBar{layer}")
+            row.addWidget(label)
+            row.addWidget(bar, 1)
+            layout.addLayout(row)
+            self.layer_bars[layer] = bar
         return box
 
     def _latest_panel(self) -> QWidget:
         latest = QGroupBox("Latest high-risk event")
         latest_layout = QVBoxLayout(latest)
-        latest_layout.addWidget(self.latest_label)
+        latest_layout.addWidget(self.latest_action_label)
+        latest_layout.addWidget(self.latest_target_label)
+        latest_layout.addWidget(self.latest_meta_label)
+        latest_layout.addStretch(1)
         return latest
 
     def _recent_panel(self) -> QWidget:
         recent = QGroupBox("Recent events")
         layout = QVBoxLayout(recent)
+        hint = QLabel("Newest security decisions, color-coded by action")
+        hint.setObjectName("sectionHint")
+        layout.addWidget(hint)
         layout.addWidget(self.dashboard_table)
         return recent
 
@@ -224,14 +290,26 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._filter_bar())
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(self.table)
-        splitter.addWidget(self.detail)
+        splitter.addWidget(self._detail_panel())
         splitter.setSizes([930, 350])
         layout.addWidget(splitter)
         return tab
 
+    def _detail_panel(self) -> QWidget:
+        panel = QFrame()
+        panel.setObjectName("detailPanel")
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
+        layout.addWidget(self.detail_heading)
+        layout.addWidget(self.detail_summary)
+        layout.addWidget(self.detail, 1)
+        return panel
+
     def _filter_bar(self) -> QWidget:
         bar = QFrame()
         bar.setObjectName("filterBar")
+        bar.setFixedHeight(54)
         layout = QHBoxLayout(bar)
         layout.setContentsMargins(10, 8, 10, 8)
         layout.setSpacing(8)
@@ -259,6 +337,7 @@ class MainWindow(QMainWindow):
             layout.addWidget(label)
             layout.addWidget(widget)
         layout.addStretch(1)
+        layout.addWidget(self.filter_count_label)
         for widget in (
             self.action_filter,
             self.hook_filter,
@@ -268,6 +347,7 @@ class MainWindow(QMainWindow):
             self.search_filter,
         ):
             widget.setMinimumWidth(86)
+            widget.setMaximumHeight(30)
         self.action_filter.currentTextChanged.connect(self._apply_filters)
         self.hook_filter.currentTextChanged.connect(self._apply_filters)
         self.layer_filter.currentTextChanged.connect(self._apply_filters)
@@ -286,7 +366,12 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(tab)
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(12)
-        layout.addWidget(self.metrics_summary_label)
+        summary = QFrame()
+        summary.setObjectName("metricsPanel")
+        summary_layout = QVBoxLayout(summary)
+        summary_layout.addWidget(QLabel("Metrics"))
+        summary_layout.addWidget(self.metrics_summary_label)
+        layout.addWidget(summary)
         layout.addWidget(self.metrics_table)
         return tab
 
@@ -300,7 +385,7 @@ class MainWindow(QMainWindow):
         form.addRow("Connection", self.connection_runtime_label)
         form.addRow("Last error", self.error_label)
         form.addRow("Last reload", self.reload_label)
-        form.addRow("Alerts", self.popup_toggle)
+        form.addRow("Alerts", self.runtime_popup_toggle)
         layout.addWidget(form_box)
         layout.addStretch(1)
         return tab
@@ -308,6 +393,7 @@ class MainWindow(QMainWindow):
     def _add_event(self, payload: dict[str, Any]) -> None:
         event = self.model.add_payload(payload)
         self._update_dashboard()
+        self._update_filter_count()
         if event.action == "deny":
             self.alerts.show_event(event)
 
@@ -327,9 +413,15 @@ class MainWindow(QMainWindow):
 
     def _state_changed(self, state: str) -> None:
         self.runtime.connection_state = state
-        self.connection_dashboard_label.setText(state)
-        self.connection_runtime_label.setText(state)
-        self.connection_status_label.setText(state)
+        self._set_state_label(self.connection_dashboard_label, state)
+        self._set_state_label(self.connection_runtime_label, state)
+        self._set_state_label(self.connection_status_label, state)
+
+    def _set_state_label(self, label: QLabel, state: str) -> None:
+        label.setText(state)
+        label.setProperty("state", state)
+        label.style().unpolish(label)
+        label.style().polish(label)
 
     def _error_received(self, error: str) -> None:
         self.runtime.last_error = error
@@ -339,6 +431,11 @@ class MainWindow(QMainWindow):
 
     def _toggle_popups(self, enabled: bool) -> None:
         self.alerts.enabled = enabled
+        for toggle in (self.popup_toggle, self.runtime_popup_toggle):
+            if toggle.isChecked() != enabled:
+                toggle.blockSignals(True)
+                toggle.setChecked(enabled)
+                toggle.blockSignals(False)
 
     def _apply_filters(self) -> None:
         profile = self.profile_filter.text().strip() or "all"
@@ -351,6 +448,12 @@ class MainWindow(QMainWindow):
             agent=agent,
             text=self.search_filter.text(),
         )
+        self._update_filter_count()
+
+    def _update_filter_count(self) -> None:
+        self.filter_count_label.setText(
+            f"{self.model.rowCount()} shown / {len(self.store.events)} total"
+        )
 
     def _update_dashboard(self) -> None:
         self.total_label.setText(str(len(self.store.events)))
@@ -358,6 +461,15 @@ class MainWindow(QMainWindow):
         self.audit_label.setText(str(self.store.count_by_action.get("audit", 0)))
         self.epoch_label.setText(str(self.store.current_epoch))
         self.avg_latency_label.setText(f"{self.store.average_latency_us:.3f} us")
+        deny_count = self.store.count_by_action.get("deny", 0)
+        if deny_count:
+            self.posture_label.setText(f"{deny_count} blocked")
+            self.posture_label.setProperty("posture", "active")
+        else:
+            self.posture_label.setText("Monitoring")
+            self.posture_label.setProperty("posture", "quiet")
+        self.posture_label.style().unpolish(self.posture_label)
+        self.posture_label.style().polish(self.posture_label)
         total = max(len(self.store.events), 1)
         layer_text = "  ".join(
             f"{layer}: {self.store.count_by_layer.get(layer, 0)} "
@@ -365,11 +477,18 @@ class MainWindow(QMainWindow):
             for layer in ("L1", "L2", "L3")
         )
         self.layer_label.setText(layer_text)
+        for layer, bar in self.layer_bars.items():
+            count = self.store.count_by_layer.get(layer, 0)
+            ratio = int(count / total * 100)
+            bar.setValue(ratio)
+            bar.setFormat(f"{count} events / {ratio}%")
         if self.store.latest_high_risk:
             event = self.store.latest_high_risk
-            self.latest_label.setText(
-                f"{event.action.upper()} {event.hook} {event.target} "
-                f"rule={event.rule} profile={event.profile_id} agent={event.agent_id}"
+            self.latest_action_label.setText(f"{event.action.upper()} / {event.hook}")
+            self.latest_target_label.setText(event.target)
+            self.latest_meta_label.setText(
+                f"rule={event.rule}  profile={event.profile_id}  "
+                f"agent={event.agent_id}  duration={event.duration_us:.3f} us"
             )
         self._update_metrics_view(event_derived=True)
 
@@ -420,6 +539,11 @@ class MainWindow(QMainWindow):
 
     def _show_detail(self, event: EventRecord) -> None:
         pretty = json.dumps(event.raw, indent=2, ensure_ascii=False)
+        self.detail_heading.setText(f"{event.action.upper()} / {event.hook}")
+        self.detail_summary.setText(
+            f"{event.target} | rule={event.rule} | "
+            f"profile={event.profile_id} agent={event.agent_id}"
+        )
         self.detail.setPlainText(
             f"{pretty}\n\n"
             f"duration_us={event.duration_us:.3f}\n"

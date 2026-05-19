@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Any
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QFont
 
 
 LAYER_BASELINE_US = {
@@ -252,6 +252,17 @@ class EventTableModel(QAbstractTableModel):
         if not index.isValid():
             return None
         event = self.event_at(index.row())
+        if role == Qt.ItemDataRole.FontRole and index.column() in (1, 2, 8):
+            font = QFont()
+            font.setBold(event.action in {"deny", "audit"})
+            return font
+        if role == Qt.ItemDataRole.ForegroundRole:
+            if event.action == "deny":
+                return QColor("#b42318")
+            if event.action == "audit":
+                return QColor("#92400e")
+            if event.action == "allow":
+                return QColor("#067647")
         if role == Qt.ItemDataRole.BackgroundRole:
             if event.action == "deny":
                 return QColor("#fff1f2")
