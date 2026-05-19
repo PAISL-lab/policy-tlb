@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 from .models import EventRecord
@@ -7,13 +8,24 @@ from .models import EventRecord
 
 class AlertPopup(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent, Qt.WindowType.ToolTip | Qt.WindowType.FramelessWindowHint)
+        super().__init__(
+            None,
+            Qt.WindowType.Tool
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint,
+        )
+        self.parent_window = parent
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        self.setObjectName("alertPopup")
         self._title = QLabel()
+        self._title.setObjectName("alertTitle")
         self._body = QLabel()
+        self._body.setObjectName("alertBody")
         self._body.setWordWrap(True)
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(8)
         layout.addWidget(self._title)
         layout.addWidget(self._body)
 
@@ -30,11 +42,17 @@ class AlertPopup(QWidget):
             f"rule={event.rule} profile={event.profile_id} agent={event.agent_id} "
             f"duration={event.duration_us:.3f} us"
         )
-        if self.parentWidget():
-            parent_rect = self.parentWidget().geometry()
+        self.resize(380, 136)
+        if self.parent_window and self.parent_window.isVisible():
+            parent_rect = self.parent_window.frameGeometry()
             self.move(parent_rect.right() - 380, parent_rect.top() + 72 + offset)
-        self.resize(360, 130)
+        else:
+            screen = QGuiApplication.primaryScreen()
+            if screen:
+                rect = screen.availableGeometry()
+                self.move(rect.right() - self.width() - 18, rect.top() + 72 + offset)
         self.show()
+        self.raise_()
         self._timer.start(5000)
 
 

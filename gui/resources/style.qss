@@ -134,3 +134,20 @@ QStatusBar {
     background: #eef2f6;
     color: #374151;
 }
+
+QWidget#alertPopup {
+    background: #fff7ed;
+    border: 1px solid #f97316;
+    border-radius: 6px;
+}
+
+QLabel#alertTitle {
+    color: #9a3412;
+    font-weight: 700;
+    font-size: 13px;
+}
+
+QLabel#alertBody {
+    color: #431407;
+    font-size: 12px;
+}
