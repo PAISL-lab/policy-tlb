@@ -1,5 +1,7 @@
 # MCP eBPF Guard
 
+[한국어 문서](README-ko.md)
+
 MCP eBPF Guard is a runtime security framework for local Model Context Protocol
 (MCP) agents. It uses BPF LSM hooks and a TLB-hit-modeled 3-tier decision
 pipeline to detect and block dangerous agent behavior with low overhead.
@@ -614,6 +616,29 @@ Each experiment writes raw logs, parsed metrics, CSV tables, environment
 metadata, and a report under `experiments/results/`. Result directories are
 ignored by git.
 
+### Reference Experiment Environment
+
+The validated reference run used the following captured environment. Full raw
+environment files are stored in each result directory under `env/`.
+
+| Item | Captured value |
+|---|---|
+| Host | `bobbook` |
+| OS / kernel | Ubuntu `24.04.4 LTS (Noble Numbat)`, Linux `6.17.0-14-generic` |
+| CPU | Intel Core Ultra 7 155H, 22 online logical CPUs |
+| Memory | `15Gi` total RAM |
+| Clang | Ubuntu clang `18.1.3` |
+| GCC | Ubuntu GCC `13.3.0` |
+| bpftool / libbpf | bpftool `v7.7.0`, libbpf `v1.7` |
+| Active LSM chain | `lockdown,capability,landlock,yama,apparmor,bpf,ima,evm` |
+| BPF JIT | enabled, `/proc/sys/net/core/bpf_jit_enable=1` |
+| CPU governor | `performance` on all online CPUs |
+| Pinned CPU core | `EXPERIMENT_CPU_CORE=2` |
+| Run volume | `30` repeats, `100000` events per measured run |
+| Warm-up | `3` warm-up runs for latency benchmark |
+| Load average snapshot | `1.69 1.92 1.81` |
+| Thermal snapshot | exposed zones ranged from about `20C` to `82C`; this is recorded as a possible throttling factor, not treated as a controlled constant |
+
 ### Variable Control
 
 The experiment harness fixes or records the main variables needed for
@@ -635,6 +660,24 @@ therefore fixes controllable variables and records the remaining environment so
 results can be interpreted with that context. See
 `experiments/VARIABLE_CONTROL.md` for the full variable-control protocol.
 
+### Experiment Variables
+
+| 구분 | Variables | 실험 내 처리 |
+|---|---|---|
+| 독립변인 / Independent variables | Processing layer: L1 Fast Path, L2 Semi-Fast Path, L3 Slow Path | hook metrics에서 `layer`별로 분리해 비교 |
+| 독립변인 / Independent variables | Hook type: `exec`, `file_open`, `file_read`, `file_write`, `socket_connect` | latency, hit-ratio, LPM, e2e workload에서 hook별 측정 |
+| 독립변인 / Independent variables | Policy type: exact command rule, exact file rule, LPM Trie path-prefix rule, socket port rule, reload/epoch policy | benchmark별 policy directory를 생성해 동일 조건으로 반복 |
+| 독립변인 / Independent variables | Execution mode: guard off, guard on, cold/warm cache behavior | e2e benchmark는 guard off/on 비교, hit-ratio benchmark는 warm repeated I/O 측정 |
+| 종속변인 / Dependent variables | Hook latency: `duration_ns`, `duration_us`, average, min, max, approximate p50/p95/p99 | `guard.log` metrics summary를 `metrics.csv`와 `latency_by_hook_layer.csv`로 파싱 |
+| 종속변인 / Dependent variables | Path ratio: L1/L2/L3 count and ratio | `hit_ratio_by_workload.csv`에서 hook별 비율 계산 |
+| 종속변인 / Dependent variables | Workload result: total event count, elapsed time, throughput, allow/deny count | `elapsed.txt`, workload logs, generated CSV tables에서 집계 |
+| 종속변인 / Dependent variables | Reliability result: reload success, rollback success, exit status | reload benchmark의 `reload_consistency.csv`에서 반복 성공률 계산 |
+| 통제변인 / Controlled variables | Hardware, OS, kernel, compiler, libbpf/bpftool, BPF JIT status | `collect_env.sh`가 각 result directory의 `env/`에 기록 |
+| 통제변인 / Controlled variables | Git commit, build flags, policy files, policy hashes | 동일 repository state로 실행하고 `env/git.txt`, `env/policy_hash.txt`에 기록 |
+| 통제변인 / Controlled variables | Workload event count, repeat count, warm-up count, measurement scripts | `experiment.env`의 기본값과 동일 scripts로 고정 |
+| 통제변인 / Controlled variables | CPU governor, CPU core pinning, root privilege, temp directory base, loopback network target | 가능한 경우 `performance` governor와 `taskset` core pinning을 사용하고 환경에 기록 |
+| 통제 불가능하지만 기록한 변수 / Recorded uncontrolled variables | Scheduler decisions, interrupts, cache/TLB state, thermal throttling, background services, filesystem cache | 일반 데스크톱 Linux에서 완전 제거가 어려우므로 반복 측정과 `env/loadavg.txt`, `env/thermal.txt` 기록으로 완화 |
+
 Validated reference results from a controlled local run:
 
 | Claim | Result |
@@ -647,6 +690,18 @@ Validated reference results from a controlled local run:
 | `file_write` L1 hit ratio | `99.9996%` |
 | Atomic reload / rollback | `30/30` successful runs |
 | End-to-end guard-on overhead | `6.234%` |
+
+Interpretation limits:
+
+| Result type | Interpretation limit |
+|---|---|
+| L1/L3 average latency | Measures hook-internal BPF policy decision time, not full syscall latency or full application response time |
+| Hit ratio | Represents the configured repeated warm I/O workload; other access patterns may produce different L1/L2/L3 ratios |
+| LPM Trie depth result | Includes path extraction and policy lookup effects for the benchmark paths; filesystem and cache state can affect elapsed workload time |
+| Reload / rollback success | Validates the tested atomic reload failure and recovery scenario, not every possible malformed policy or runtime failure |
+| End-to-end overhead | Applies to the included file-I/O workload on the captured machine and should not be generalized without rerunning on the target environment |
+| p50/p95/p99 latency | Reported percentiles are histogram-bucket approximations unless a separate debug raw-trace mode is used |
+| Thermal readings | The highest exposed thermal zone reached about `82C`; this does not by itself prove throttling, but it should be reported as an uncontrolled environmental factor |
 
 Use these numbers as a reference for the same machine and configuration, not as
 portable constants. The environment collector records kernel, compiler, BPF JIT,
