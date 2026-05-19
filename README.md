@@ -662,21 +662,21 @@ results can be interpreted with that context. See
 
 ### Experiment Variables
 
-| 구분 | Variables | 실험 내 처리 |
+| Category | Variables | Handling in experiments |
 |---|---|---|
-| 독립변인 / Independent variables | Processing layer: L1 Fast Path, L2 Semi-Fast Path, L3 Slow Path | hook metrics에서 `layer`별로 분리해 비교 |
-| 독립변인 / Independent variables | Hook type: `exec`, `file_open`, `file_read`, `file_write`, `socket_connect` | latency, hit-ratio, LPM, e2e workload에서 hook별 측정 |
-| 독립변인 / Independent variables | Policy type: exact command rule, exact file rule, LPM Trie path-prefix rule, socket port rule, reload/epoch policy | benchmark별 policy directory를 생성해 동일 조건으로 반복 |
-| 독립변인 / Independent variables | Execution mode: guard off, guard on, cold/warm cache behavior | e2e benchmark는 guard off/on 비교, hit-ratio benchmark는 warm repeated I/O 측정 |
-| 종속변인 / Dependent variables | Hook latency: `duration_ns`, `duration_us`, average, min, max, approximate p50/p95/p99 | `guard.log` metrics summary를 `metrics.csv`와 `latency_by_hook_layer.csv`로 파싱 |
-| 종속변인 / Dependent variables | Path ratio: L1/L2/L3 count and ratio | `hit_ratio_by_workload.csv`에서 hook별 비율 계산 |
-| 종속변인 / Dependent variables | Workload result: total event count, elapsed time, throughput, allow/deny count | `elapsed.txt`, workload logs, generated CSV tables에서 집계 |
-| 종속변인 / Dependent variables | Reliability result: reload success, rollback success, exit status | reload benchmark의 `reload_consistency.csv`에서 반복 성공률 계산 |
-| 통제변인 / Controlled variables | Hardware, OS, kernel, compiler, libbpf/bpftool, BPF JIT status | `collect_env.sh`가 각 result directory의 `env/`에 기록 |
-| 통제변인 / Controlled variables | Git commit, build flags, policy files, policy hashes | 동일 repository state로 실행하고 `env/git.txt`, `env/policy_hash.txt`에 기록 |
-| 통제변인 / Controlled variables | Workload event count, repeat count, warm-up count, measurement scripts | `experiment.env`의 기본값과 동일 scripts로 고정 |
-| 통제변인 / Controlled variables | CPU governor, CPU core pinning, root privilege, temp directory base, loopback network target | 가능한 경우 `performance` governor와 `taskset` core pinning을 사용하고 환경에 기록 |
-| 통제 불가능하지만 기록한 변수 / Recorded uncontrolled variables | Scheduler decisions, interrupts, cache/TLB state, thermal throttling, background services, filesystem cache | 일반 데스크톱 Linux에서 완전 제거가 어려우므로 반복 측정과 `env/loadavg.txt`, `env/thermal.txt` 기록으로 완화 |
+| Independent variables | Processing layer: L1 Fast Path, L2 Semi-Fast Path, L3 Slow Path | Compared by the `layer` field in hook metrics |
+| Independent variables | Hook type: `exec`, `file_open`, `file_read`, `file_write`, `socket_connect` | Measured across latency, hit-ratio, LPM, and end-to-end workloads |
+| Independent variables | Policy type: exact command rule, exact file rule, LPM Trie path-prefix rule, socket port rule, reload/epoch policy | Repeated with benchmark-specific policy directories under the same conditions |
+| Independent variables | Execution mode: guard off, guard on, cold/warm cache behavior | End-to-end benchmark compares guard off/on; hit-ratio benchmark measures repeated warm I/O |
+| Dependent variables | Hook latency: `duration_ns`, `duration_us`, average, min, max, approximate p50/p95/p99 | Parsed from `guard.log` metrics summaries into `metrics.csv` and `latency_by_hook_layer.csv` |
+| Dependent variables | Path ratio: L1/L2/L3 count and ratio | Calculated per hook in `hit_ratio_by_workload.csv` |
+| Dependent variables | Workload result: total event count, elapsed time, throughput, allow/deny count | Aggregated from `elapsed.txt`, workload logs, and generated CSV tables |
+| Dependent variables | Reliability result: reload success, rollback success, exit status | Calculated from repeated reload benchmark outcomes in `reload_consistency.csv` |
+| Controlled variables | Hardware, OS, kernel, compiler, libbpf/bpftool, BPF JIT status | Captured by `collect_env.sh` under each result directory's `env/` folder |
+| Controlled variables | Git commit, build flags, policy files, policy hashes | Run from the same repository state and recorded in `env/git.txt` and `env/policy_hash.txt` |
+| Controlled variables | Workload event count, repeat count, warm-up count, measurement scripts | Fixed through `experiment.env` defaults and shared scripts |
+| Controlled variables | CPU governor, CPU core pinning, root privilege, temp directory base, loopback network target | Uses `performance` governor and `taskset` pinning where available, and records the environment |
+| Recorded uncontrolled variables | Scheduler decisions, interrupts, cache/TLB state, thermal throttling, background services, filesystem cache | Not fully removable on desktop Linux; mitigated through repeated measurements plus `env/loadavg.txt` and `env/thermal.txt` records |
 
 Validated reference results from a controlled local run:
 
