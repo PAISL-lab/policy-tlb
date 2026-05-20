@@ -1,0 +1,5 @@
+{
+  "default_action": "allow",
+  "enforce": true,
+  "audit_allowed": false
+}

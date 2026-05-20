@@ -1,0 +1,19 @@
+{
+  "rules": [
+    {
+      "name": "curl",
+      "value": "/usr/bin/curl",
+      "action": "deny"
+    },
+    {
+      "name": "wget",
+      "value": "/usr/bin/wget",
+      "action": "deny"
+    },
+    {
+      "name": "netcat",
+      "value": "/usr/bin/nc",
+      "action": "deny"
+    }
+  ]
+}

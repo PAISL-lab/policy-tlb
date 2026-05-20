@@ -1,0 +1,10 @@
+{
+  "profile": "codex-agent",
+  "profile_id": 42,
+  "agent_id": 7,
+  "mode": "scoped",
+  "comms": ["codex", "zsh"],
+  "pids": [],
+  "tgids": [],
+  "notes": "Scoped to Codex and its shell-launched tool commands for MCP agent demo events."
+}

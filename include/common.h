@@ -1,0 +1,105 @@
+// SPDX-License-Identifier: Apache-2.0
+#ifndef MCP_GUARD_COMMON_H
+#define MCP_GUARD_COMMON_H
+
+#ifndef __VMLINUX_H__
+#include <linux/types.h>
+#endif
+
+#define MCP_GUARD_PATH_LEN 256
+#define MCP_GUARD_RULE_VALUE_LEN 192
+#define MCP_GUARD_PATH_LPM_LEN MCP_GUARD_RULE_VALUE_LEN
+#define MCP_GUARD_RULE_NAME_LEN 64
+#define MCP_GUARD_COMM_LEN 16
+#define MCP_GUARD_PROFILE_NAME_LEN 64
+#define MCP_GUARD_MAX_RULES 32
+#define MCP_GUARD_MAX_SCOPES 64
+#define MCP_GUARD_MAX_CLIENTS 16
+#define MCP_GUARD_SOCKET_PATH "/tmp/mcp-guard.sock"
+
+#define MCP_GUARD_EPOCH_KEY 0
+#define MCP_GUARD_CONFIG_KEY 0
+#define MCP_GUARD_DENY_ERRNO 13
+#define MCP_GUARD_TAIL_L2 0
+#define MCP_GUARD_TAIL_L3 1
+#define MCP_GUARD_TAIL_MAX 2
+#define MCP_GUARD_METRIC_SLOTS 256
+#define MCP_GUARD_HIST_BUCKETS 8
+
+#define MCP_GUARD_S_IFMT 00170000
+#define MCP_GUARD_S_IFREG 0100000
+#define MCP_GUARD_S_IFDIR 0040000
+
+#define MCP_GUARD_MAY_EXEC 1
+#define MCP_GUARD_MAY_WRITE 2
+#define MCP_GUARD_MAY_READ 4
+#define MCP_GUARD_MAY_APPEND 8
+
+#define MCP_GUARD_AF_UNIX 1
+#define MCP_GUARD_AF_INET 2
+
+#define MCP_GUARD_POLICY_F_SKIP_DIR_READ (1U << 0)
+#define MCP_GUARD_POLICY_F_CACHE_FILE_FOLLOWUPS (1U << 1)
+#define MCP_GUARD_POLICY_F_DENY_TAILCALL_FAIL (1U << 2)
+#define MCP_GUARD_POLICY_F_SKIP_L2_SAFE (1U << 3)
+
+#define MCP_GUARD_RULE_F_SKIP_L2_SAFE (1U << 0)
+
+enum mcp_guard_action {
+	MCP_GUARD_ACTION_ALLOW = 0,
+	MCP_GUARD_ACTION_DENY = 1,
+	MCP_GUARD_ACTION_AUDIT = 2,
+	MCP_GUARD_ACTION_UNSET = 255,
+};
+
+static inline int mcp_guard_action_valid(__u32 action)
+{
+	return action == MCP_GUARD_ACTION_ALLOW ||
+	       action == MCP_GUARD_ACTION_DENY ||
+	       action == MCP_GUARD_ACTION_AUDIT;
+}
+
+enum mcp_guard_hook {
+	MCP_GUARD_HOOK_EXEC = 1,
+	MCP_GUARD_HOOK_FILE_OPEN = 2,
+	MCP_GUARD_HOOK_FILE_READ = 3,
+	MCP_GUARD_HOOK_FILE_WRITE = 4,
+	MCP_GUARD_HOOK_SOCKET_CONNECT = 5,
+};
+
+enum mcp_guard_rule_type {
+	MCP_GUARD_RULE_PATH_PREFIX = 1,
+	MCP_GUARD_RULE_COMMAND_PREFIX = 2,
+	MCP_GUARD_RULE_IPV4_CONNECT = 3,
+};
+
+enum mcp_guard_layer {
+	MCP_GUARD_LAYER_L1 = 1,
+	MCP_GUARD_LAYER_L2 = 2,
+	MCP_GUARD_LAYER_L3 = 3,
+};
+
+enum mcp_guard_reason {
+	MCP_GUARD_REASON_POLICY = 1,
+	MCP_GUARD_REASON_DEFAULT = 2,
+	MCP_GUARD_REASON_L1_CACHE = 3,
+	MCP_GUARD_REASON_L2_SAFE = 4,
+};
+
+enum mcp_guard_scope_mode {
+	MCP_GUARD_SCOPE_SYSTEM_WIDE = 0,
+	MCP_GUARD_SCOPE_SCOPED = 1,
+};
+
+enum mcp_guard_scope_selector {
+	MCP_GUARD_SCOPE_SELECTOR_COMM = 1,
+	MCP_GUARD_SCOPE_SELECTOR_PID = 2,
+	MCP_GUARD_SCOPE_SELECTOR_TGID = 3,
+};
+
+static inline __u32 mcp_guard_hook_mask(__u32 hook_id)
+{
+	return 1U << hook_id;
+}
+
+#endif

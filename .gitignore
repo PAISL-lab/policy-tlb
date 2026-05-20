@@ -1,0 +1,51 @@
+# Build outputs
+/build/
+/mcp-guard
+*.o
+*.a
+*.so
+*.d
+
+# Autoconf generated local files
+/autom4te.cache/
+/config.log
+/config.mk
+/config.status
+
+# Generated libbpf artifacts
+*.skel.h
+
+# Runtime artifacts
+*.log
+*.pid
+core
+core.*
+/mcp-guard.sock
+
+# Editor and OS noise
+.DS_Store
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Python GUI artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+.devtools/
+
+# Experiment outputs
+experiments/results/*
+!experiments/results/.gitkeep
+
+# CMake build trees
+/cmake-build-*/
+/CMakeFiles/
+/CMakeCache.txt
+/cmake_install.cmake
+/compile_commands.json
+.deps/
