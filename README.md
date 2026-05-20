@@ -6,6 +6,10 @@ MCP eBPF Guard is a runtime security framework for local Model Context Protocol
 (MCP) agents. It uses BPF LSM hooks and a TLB-hit-modeled 3-tier decision
 pipeline to detect and block dangerous agent behavior with low overhead.
 
+This is an in-progress research prototype. The implementation, GUI, policy
+format, and experiment harness are intended for academic evaluation and
+controlled development environments, not production deployment.
+
 This repository implements the paper idea:
 
 > Ultra-Low Overhead MCP Agent Behavioral Control Framework using
@@ -637,7 +641,7 @@ environment files are stored in each result directory under `env/`.
 
 | Item | Captured value |
 |---|---|
-| Host | `bobbook` |
+| Host | `reference-laptop` |
 | OS / kernel | Ubuntu `24.04.4 LTS (Noble Numbat)`, Linux `6.17.0-14-generic` |
 | CPU | Intel Core Ultra 7 155H, 22 online logical CPUs |
 | Memory | `15Gi` total RAM |
@@ -779,6 +783,7 @@ not the repository-level license statement.
 
 ## Safety Note
 
-This is an experimental security framework. It attaches BPF LSM programs and can
-deny real process, file, and socket operations. Test it in a development
-environment before using it on a primary workstation.
+This is an experimental, in-progress research project. It attaches BPF LSM
+programs and can deny real process, file, and socket operations. Test it in a
+development environment before using it on a primary workstation, and review the
+policy files carefully before enabling enforcement.

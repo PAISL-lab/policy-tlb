@@ -12,7 +12,7 @@
     },
     {
       "name": "ssh-private-keys",
-      "value": "/home/jihyo/.ssh/",
+      "value": "/home/demo/.ssh/",
       "action": "deny"
     }
   ]
