@@ -781,6 +781,14 @@ The BPF object declaration `char LICENSE[] SEC("license") = "GPL"` is kernel
 verifier metadata used for BPF program loading and helper compatibility. It is
 not the repository-level license statement.
 
+## Repository History Notice
+
+This repository is a cleaned public research release. The original development
+repository was recreated because an earlier commit history contained sensitive
+local configuration and environment-specific files. The current repository
+preserves the implementation, documentation, tests, and experiment harness in a
+sanitized form suitable for public review.
+
 ## Safety Note
 
 This is an experimental, in-progress research project. It attaches BPF LSM
