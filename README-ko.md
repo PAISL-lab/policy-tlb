@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: CC-BY-4.0 -->
+
 # MCP eBPF Guard
 
 [English README](README.md)
@@ -703,12 +705,27 @@ event preparation, ring buffer submission도 포함합니다. 따라서 L3 event
 
 ## 라이선스
 
-이 프로젝트는 Apache License, Version 2.0으로 배포됩니다. 자세한 내용은
-`LICENSE`를 참고하세요.
+이 저장소는 컴포넌트별로 여러 오픈소스 라이선스를 사용합니다.
 
-BPF object의 `char LICENSE[] SEC("license") = "GPL"` 선언은 BPF program
-loading과 helper compatibility를 위한 커널 verifier metadata입니다. 저장소
-전체의 프로젝트 라이선스 표기가 아닙니다.
+| 컴포넌트 | 라이선스 |
+|---|---|
+| Core enforcement engine: `bpf/`, `loader/`, core `include/`, `tests/`, `experiments/`, `scripts/`, `policies/` | GPL-2.0-or-later |
+| Client library / SDK: `libmcpguard/`, `sdk/`, `clients/`, `include/client/` | LGPL-2.1-or-later |
+| GUI / dashboard: `gui/`, `web-dashboard/`, `operator-console/` | AGPL-3.0-or-later |
+| Documentation, figures, papers, and presentation materials: `docs/`, `paper/`, `figures/`, `presentations/` | CC-BY-4.0 |
+
+Core enforcement engine과 GUI는 별도 프로그램으로 설계되어 있습니다. 두
+프로그램은 Unix domain socket을 통해 newline-delimited JSON event로
+통신합니다. GUI는 GPL core implementation code를 직접 링크하거나 복사하지
+않아야 합니다.
+
+BPF object의 `char LICENSE[] SEC("license") = "GPL"` 선언은
+kernel-facing BPF verifier/helper compatibility metadata이며, 저장소 파일의
+SPDX 라이선스 헤더를 덮어쓰지 않습니다.
+
+이 README의 코드 블록은 설명하는 컴포넌트의 라이선스를 따릅니다.
+
+자세한 내용은 `LICENSE`, `LICENSES/`, `docs/LICENSE_POLICY.md`를 참고하세요.
 
 ## 저장소 이력 안내
 

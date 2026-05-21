@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+
 # MCP Guard GUI
 
 PySide6 desktop GUI for MCP Guard.
@@ -83,3 +85,11 @@ sudo ./mcp-guard /path/to/policies --gui
   `gui/run_gui.py` process is still running and check `/tmp/mcp-guard-gui.log`.
 - The GUI does not need `sudo`; only the loader needs privileges.
 - Use replay mode for UI work when BPF or the loader is not running.
+
+## License Boundary
+
+The GUI is licensed under AGPL-3.0-or-later and is designed to run as a
+separate program from the GPL-licensed core enforcement engine. It communicates
+with the core through the Unix domain socket newline-delimited JSON event
+protocol and should not directly link against or copy GPL core implementation
+code.

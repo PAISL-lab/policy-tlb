@@ -1,0 +1,36 @@
+version = 1
+
+[[annotations]]
+path = [
+  ".clangd",
+  ".gitignore",
+  "config.mk.in",
+  "configure",
+  "configure.ac",
+  "Makefile",
+  "policies/*.json",
+  "experiments/*.md",
+  "experiments/config/*.env",
+  "experiments/templates/*.md",
+  "experiments/baselines/.gitignore",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "MCP eBPF Guard contributors"
+SPDX-License-Identifier = "GPL-2.0-or-later"
+
+[[annotations]]
+path = [
+  "docs/assets/*.svg",
+  "LICENSE",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "MCP eBPF Guard contributors"
+SPDX-License-Identifier = "CC-BY-4.0"
+
+[[annotations]]
+path = [
+  "gui/samples/*.ndjson",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "MCP eBPF Guard contributors"
+SPDX-License-Identifier = "AGPL-3.0-or-later"

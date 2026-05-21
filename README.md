@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: CC-BY-4.0 -->
+
 # MCP eBPF Guard
 
 [Korean README](README-ko.md)
@@ -709,12 +711,26 @@ L1 hit behavior against the L3 slow path.
 
 ## License
 
-This project is licensed under the Apache License, Version 2.0. See
-`LICENSE`.
+This repository uses multiple open-source licenses by component.
 
-The BPF object declaration `char LICENSE[] SEC("license") = "GPL"` is kernel
-verifier metadata used for BPF program loading and helper compatibility. It is
-not the repository-level license statement.
+| Component | License |
+|---|---|
+| Core enforcement engine: `bpf/`, `loader/`, core `include/`, `tests/`, `experiments/`, `scripts/`, `policies/` | GPL-2.0-or-later |
+| Client library / SDK: `libmcpguard/`, `sdk/`, `clients/`, `include/client/` | LGPL-2.1-or-later |
+| GUI / dashboard: `gui/`, `web-dashboard/`, `operator-console/` | AGPL-3.0-or-later |
+| Documentation, figures, papers, and presentation materials: `docs/`, `paper/`, `figures/`, `presentations/` | CC-BY-4.0 |
+
+The core enforcement engine and the GUI are designed as separate programs. They
+communicate through a Unix domain socket using newline-delimited JSON events.
+The GUI should not directly link against or copy GPL core implementation code.
+
+The BPF object declaration `char LICENSE[] SEC("license") = "GPL"` is used as
+kernel-facing BPF verifier/helper compatibility metadata and does not override
+the SPDX license headers of repository files.
+
+Code blocks in this README follow the license of the component they describe.
+
+See `LICENSE`, `LICENSES/`, and `docs/LICENSE_POLICY.md` for details.
 
 ## Repository History Notice
 

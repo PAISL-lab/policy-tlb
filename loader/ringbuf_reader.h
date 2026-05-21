@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: GPL-2.0-or-later
 #ifndef MCP_GUARD_RINGBUF_READER_H
 #define MCP_GUARD_RINGBUF_READER_H
 
