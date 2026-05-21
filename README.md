@@ -161,6 +161,7 @@ docs/
   assets/architecture.svg       Runtime architecture diagram
   assets/decision-pipeline.svg  L1/L2/L3 policy pipeline diagram
   assets/epoch-reload.svg       Epoch invalidation and reload diagram
+  assets/experiment-harness.svg Controlled experiment harness diagram
 ```
 
 ## Architecture
@@ -544,6 +545,8 @@ Sample output:
 The repository includes a controlled experiment harness under `experiments/` for
 paper-oriented evaluation. It separates eBPF hook-internal policy latency from
 end-to-end workload overhead.
+
+![MCPGuard controlled experiment harness](docs/assets/experiment-harness.svg)
 
 Default experiment settings:
 

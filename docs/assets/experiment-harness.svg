@@ -1,0 +1,116 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="600" viewBox="0 0 1120 600" role="img" aria-labelledby="title desc">
+  <title id="title">MCPGuard controlled experiment harness</title>
+  <desc id="desc">A technical diagram showing workloads feeding guard off, guard on, and benchmark runs, with guard logs parsed for hook-internal latency and time command output parsed for end-to-end overhead before producing CSV tables and reports.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M1,1 L9,5 L1,9 Z" fill="#263238"/>
+    </marker>
+    <marker id="arrow-muted" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M1,1 L9,5 L1,9 Z" fill="#687781"/>
+    </marker>
+    <style>
+      .bg { fill: #fff; }
+      .title { font: 700 23px Arial, Helvetica, sans-serif; fill: #101820; }
+      .caption { font: 400 13px Arial, Helvetica, sans-serif; fill: #54636d; }
+      .lane-title { font: 700 12px Arial, Helvetica, sans-serif; fill: #45545e; letter-spacing: .05em; }
+      .box-title { font: 700 15px Arial, Helvetica, sans-serif; fill: #101820; }
+      .box-text { font: 400 12px Arial, Helvetica, sans-serif; fill: #394952; }
+      .note { font: 400 11px Arial, Helvetica, sans-serif; fill: #5c6b74; }
+      .label { font: 700 11px Arial, Helvetica, sans-serif; fill: #46545d; }
+      .lane { fill: #f7f9fb; stroke: #a8b0bd; stroke-width: 1.1; }
+      .box { fill: #fff; stroke: #263238; stroke-width: 1.3; }
+      .workload { fill: #f4f8fb; }
+      .guard { fill: #eef7f1; stroke: #456b55; }
+      .noguard { fill: #f8fafc; stroke: #4d5b66; stroke-dasharray: 5 4; }
+      .raw { fill: #fff8e8; stroke: #6f5934; }
+      .parse { fill: #f6f1f8; stroke: #66506f; }
+      .table { fill: #fff5f3; stroke: #7b4a43; }
+      .env { fill: #f7f9fb; stroke: #4d5b66; }
+      .line { stroke: #263238; stroke-width: 1.8; fill: none; marker-end: url(#arrow); }
+      .thin { stroke: #687781; stroke-width: 1.3; fill: none; marker-end: url(#arrow-muted); }
+      .dash { stroke: #687781; stroke-width: 1.3; fill: none; stroke-dasharray: 5 5; marker-end: url(#arrow-muted); }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1120" height="600"/>
+  <text x="40" y="42" class="title">Controlled experiment harness</text>
+  <text x="40" y="64" class="caption">Hook-internal policy latency and end-to-end workload time are collected through separate measurement paths.</text>
+
+  <rect x="40" y="94" width="1040" height="126" rx="4" class="lane"/>
+  <text x="58" y="119" class="lane-title">WORKLOAD GENERATION</text>
+
+  <rect x="40" y="250" width="1040" height="142" rx="4" class="lane"/>
+  <text x="58" y="275" class="lane-title">RAW MEASUREMENT CAPTURE</text>
+
+  <rect x="40" y="422" width="1040" height="112" rx="4" class="lane"/>
+  <text x="58" y="447" class="lane-title">PARSING, AGGREGATION, AND REPORTING</text>
+
+  <rect x="78" y="140" width="172" height="54" class="box workload"/>
+  <text x="164" y="162" text-anchor="middle" class="box-title">Workloads</text>
+  <text x="164" y="181" text-anchor="middle" class="box-text">file, socket, exec, mixed</text>
+
+  <rect x="316" y="140" width="172" height="54" class="box guard"/>
+  <text x="402" y="162" text-anchor="middle" class="box-title">Guard on</text>
+  <text x="402" y="181" text-anchor="middle" class="box-text">MCPGuard pipeline active</text>
+
+  <rect x="554" y="140" width="172" height="54" class="box noguard"/>
+  <text x="640" y="162" text-anchor="middle" class="box-title">Guard off</text>
+  <text x="640" y="181" text-anchor="middle" class="box-text">same workload, no BPF guard</text>
+
+  <rect x="792" y="140" width="172" height="54" class="box env"/>
+  <text x="878" y="162" text-anchor="middle" class="box-title">Environment</text>
+  <text x="878" y="181" text-anchor="middle" class="box-text">kernel, CPU, tools, policy hash</text>
+
+  <path d="M250 167 H306" class="line"/>
+  <path d="M250 167 C286 226 574 226 640 204" class="dash"/>
+  <path d="M878 194 V240" class="thin"/>
+
+  <rect x="96" y="302" width="188" height="60" class="box raw"/>
+  <text x="190" y="326" text-anchor="middle" class="box-title">guard.log</text>
+  <text x="190" y="346" text-anchor="middle" class="box-text">metrics summary lines</text>
+
+  <rect x="350" y="302" width="188" height="60" class="box raw"/>
+  <text x="444" y="326" text-anchor="middle" class="box-title">elapsed.txt</text>
+  <text x="444" y="346" text-anchor="middle" class="box-text">/usr/bin/time -v output</text>
+
+  <rect x="604" y="302" width="188" height="60" class="box raw"/>
+  <text x="698" y="326" text-anchor="middle" class="box-title">workload.log</text>
+  <text x="698" y="346" text-anchor="middle" class="box-text">event count and exit status</text>
+
+  <rect x="858" y="302" width="160" height="60" class="box raw"/>
+  <text x="938" y="326" text-anchor="middle" class="box-title">env/</text>
+  <text x="938" y="346" text-anchor="middle" class="box-text">captured control variables</text>
+
+  <path d="M402 194 C402 242 190 250 190 292" class="line"/>
+  <path d="M402 194 C402 242 444 250 444 292" class="line"/>
+  <path d="M402 194 C402 242 698 250 698 292" class="thin"/>
+  <path d="M640 194 C640 248 444 252 444 292" class="thin"/>
+  <path d="M878 250 V292" class="thin"/>
+
+  <rect x="96" y="466" width="188" height="54" class="box parse"/>
+  <text x="190" y="488" text-anchor="middle" class="box-title">parse_metrics.py</text>
+  <text x="190" y="507" text-anchor="middle" class="box-text">hook/layer latency tables</text>
+
+  <rect x="350" y="466" width="188" height="54" class="box parse"/>
+  <text x="444" y="488" text-anchor="middle" class="box-title">analyze_results.py</text>
+  <text x="444" y="507" text-anchor="middle" class="box-text">ratios and overhead</text>
+
+  <rect x="604" y="466" width="188" height="54" class="box table"/>
+  <text x="698" y="488" text-anchor="middle" class="box-title">CSV tables</text>
+  <text x="698" y="507" text-anchor="middle" class="box-text">latency, hit ratio, e2e</text>
+
+  <rect x="858" y="466" width="160" height="54" class="box table"/>
+  <text x="938" y="488" text-anchor="middle" class="box-title">report.md</text>
+  <text x="938" y="507" text-anchor="middle" class="box-text">paper-ready summary</text>
+
+  <path d="M190 362 V456" class="line"/>
+  <path d="M444 362 V456" class="line"/>
+  <path d="M698 362 V456" class="thin"/>
+  <path d="M938 362 V456" class="thin"/>
+  <path d="M284 493 H340" class="line"/>
+  <path d="M538 493 H594" class="line"/>
+  <path d="M792 493 H848" class="line"/>
+
+  <text x="68" y="232" class="label">same event count, repeat count, CPU pinning, policy files, and warm-up settings</text>
+  <text x="40" y="574" class="note">Interpretation rule: metrics-derived hook latency is not mixed with end-to-end workload elapsed time.</text>
+</svg>

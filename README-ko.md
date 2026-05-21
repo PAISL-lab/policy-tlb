@@ -159,6 +159,7 @@ docs/
   assets/architecture.svg       런타임 아키텍처 다이어그램
   assets/decision-pipeline.svg  L1/L2/L3 정책 파이프라인 다이어그램
   assets/epoch-reload.svg       epoch invalidation 및 reload 다이어그램
+  assets/experiment-harness.svg 변수통제 실험 harness 다이어그램
 ```
 
 ## 아키텍처
@@ -542,6 +543,8 @@ Sample output:
 이 저장소는 논문 평가를 위한 변수통제 실험 harness를 `experiments/` 아래에
 포함합니다. 이 harness는 eBPF hook 내부 policy latency와 end-to-end workload
 overhead를 분리합니다.
+
+![MCPGuard 변수통제 실험 harness](docs/assets/experiment-harness.svg)
 
 기본 실험 설정:
 
