@@ -1,0 +1,100 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="560" viewBox="0 0 1120 560" role="img" aria-labelledby="title desc">
+  <title id="title">MCPGuard epoch invalidation and atomic reload</title>
+  <desc id="desc">A technical flow diagram showing validation of a new policy, staging into an inactive generation, flipping active generation and global epoch, automatic cache invalidation, and rollback before the flip on failure.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M1,1 L9,5 L1,9 Z" fill="#263238"/>
+    </marker>
+    <marker id="arrow-muted" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M1,1 L9,5 L1,9 Z" fill="#687781"/>
+    </marker>
+    <style>
+      .bg { fill: #fff; }
+      .title { font: 700 23px Arial, Helvetica, sans-serif; fill: #101820; }
+      .caption { font: 400 13px Arial, Helvetica, sans-serif; fill: #54636d; }
+      .lane-title { font: 700 12px Arial, Helvetica, sans-serif; fill: #45545e; letter-spacing: .05em; }
+      .box-title { font: 700 15px Arial, Helvetica, sans-serif; fill: #101820; }
+      .box-text { font: 400 12px Arial, Helvetica, sans-serif; fill: #394952; }
+      .label { font: 700 11px Arial, Helvetica, sans-serif; fill: #46545d; }
+      .note { font: 400 11px Arial, Helvetica, sans-serif; fill: #5c6b74; }
+      .lane { fill: #f7f9fb; stroke: #a8b0bd; stroke-width: 1.1; }
+      .box { fill: #fff; stroke: #263238; stroke-width: 1.3; }
+      .stage { fill: #f4f8fb; }
+      .safe { fill: #eef7f1; stroke: #456b55; }
+      .warn { fill: #fff8e8; stroke: #6f5934; }
+      .old { fill: #f8fafc; stroke: #4d5b66; stroke-dasharray: 5 4; }
+      .bad { fill: #fff5f3; stroke: #7b4a43; }
+      .line { stroke: #263238; stroke-width: 1.8; fill: none; marker-end: url(#arrow); }
+      .thin { stroke: #687781; stroke-width: 1.3; fill: none; marker-end: url(#arrow-muted); }
+      .dash { stroke: #687781; stroke-width: 1.3; fill: none; stroke-dasharray: 5 5; marker-end: url(#arrow-muted); }
+      .fail { stroke: #8b453f; stroke-width: 1.5; fill: none; stroke-dasharray: 6 5; marker-end: url(#arrow-muted); }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1120" height="560"/>
+  <text x="40" y="42" class="title">Epoch invalidation and atomic policy reload</text>
+  <text x="40" y="64" class="caption">Reloads stage a new generation first, then flip the active generation and epoch as the final visible step.</text>
+
+  <rect x="40" y="94" width="1040" height="128" rx="4" class="lane"/>
+  <text x="58" y="119" class="lane-title">USER SPACE RELOAD PATH</text>
+
+  <rect x="40" y="260" width="1040" height="158" rx="4" class="lane"/>
+  <text x="58" y="285" class="lane-title">BPF MAP STATE</text>
+
+  <rect x="70" y="140" width="174" height="52" class="box stage"/>
+  <text x="157" y="161" text-anchor="middle" class="box-title">1. Parse policy</text>
+  <text x="157" y="180" text-anchor="middle" class="box-text">JSON to in-memory plan</text>
+
+  <rect x="294" y="140" width="174" height="52" class="box stage"/>
+  <text x="381" y="161" text-anchor="middle" class="box-title">2. Validate</text>
+  <text x="381" y="180" text-anchor="middle" class="box-text">reject malformed rules</text>
+
+  <rect x="518" y="140" width="174" height="52" class="box warn"/>
+  <text x="605" y="161" text-anchor="middle" class="box-title">3. Stage maps</text>
+  <text x="605" y="180" text-anchor="middle" class="box-text">inactive generation N+1</text>
+
+  <rect x="742" y="140" width="174" height="52" class="box safe"/>
+  <text x="829" y="161" text-anchor="middle" class="box-title">4. Flip active</text>
+  <text x="829" y="180" text-anchor="middle" class="box-text">generation=N+1</text>
+
+  <rect x="966" y="140" width="92" height="52" class="box safe"/>
+  <text x="1012" y="161" text-anchor="middle" class="box-title">5. Epoch</text>
+  <text x="1012" y="180" text-anchor="middle" class="box-text">E to E+1</text>
+
+  <path d="M244 166 H284" class="line"/>
+  <path d="M468 166 H508" class="line"/>
+  <path d="M692 166 H732" class="line"/>
+  <path d="M916 166 H956" class="line"/>
+
+  <rect x="92" y="318" width="210" height="68" class="box old"/>
+  <text x="197" y="343" text-anchor="middle" class="box-title">Active generation N</text>
+  <text x="197" y="365" text-anchor="middle" class="box-text">currently visible policy indexes</text>
+
+  <rect x="392" y="318" width="210" height="68" class="box warn"/>
+  <text x="497" y="343" text-anchor="middle" class="box-title">Inactive generation N+1</text>
+  <text x="497" y="365" text-anchor="middle" class="box-text">staged but invisible to BPF</text>
+
+  <rect x="692" y="318" width="210" height="68" class="box safe"/>
+  <text x="797" y="343" text-anchor="middle" class="box-title">New active policy</text>
+  <text x="797" y="365" text-anchor="middle" class="box-text">BPF lookups include generation</text>
+
+  <rect x="922" y="318" width="126" height="68" class="box bad"/>
+  <text x="985" y="343" text-anchor="middle" class="box-title">Old L1 entries</text>
+  <text x="985" y="365" text-anchor="middle" class="box-text">epoch mismatch</text>
+
+  <path d="M605 192 V302 H497 V308" class="thin"/>
+  <path d="M829 192 V302 H797 V308" class="thin"/>
+  <path d="M1012 192 V302 H985 V308" class="thin"/>
+  <path d="M902 352 H912" class="thin"/>
+  <text x="950" y="407" text-anchor="middle" class="label">cache is not scanned; stale entries are ignored</text>
+
+  <rect x="294" y="452" width="280" height="54" class="box bad"/>
+  <text x="434" y="474" text-anchor="middle" class="box-title">Validation or staging failure</text>
+  <text x="434" y="493" text-anchor="middle" class="box-text">delete staged entries; keep generation N and epoch E</text>
+
+  <path d="M381 192 C381 236 240 238 240 308" class="fail"/>
+  <text x="300" y="242" text-anchor="middle" class="label">existing policy remains active</text>
+  <path d="M518 166 C468 214 434 400 434 442" class="fail"/>
+
+  <text x="40" y="538" class="note">Safety property: new policy data becomes visible only after validation succeeds; cache invalidation is O(1) through the epoch change.</text>
+</svg>

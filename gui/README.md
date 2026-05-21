@@ -9,7 +9,7 @@ gui/
   run_gui.py              executable entrypoint
   requirements.txt        Python dependencies
   mcp_guard_gui/          application package
-  resources/              style and icon assets
+  resources/              stylesheet assets
   samples/                replayable demo event streams
 ```
 

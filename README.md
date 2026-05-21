@@ -158,55 +158,14 @@ tests/
   test_agent_scope.sh
 
 docs/
-  loader-development-guide*.md
-  gui-development-guide*.md
+  assets/architecture.svg       Runtime architecture diagram
+  assets/decision-pipeline.svg  L1/L2/L3 policy pipeline diagram
+  assets/epoch-reload.svg       Epoch invalidation and reload diagram
 ```
 
 ## Architecture
 
-```text
-             MCP agent / local process
-                       |
-                       v
-              Linux syscall path
-                       |
-                       v
-                BPF LSM hooks
-                       |
-       +---------------+----------------+
-       |                                |
-       v                                |
-  L1 Fast Path                          |
-  cache lookup                          |
-       | hit                            |
-       v                                |
-  allow / deny                          |
-                                        |
-       miss (tail call)                 |
-       v                                |
-  L2 Semi-Fast Path                     |
-  cheap safe-resource checks            |
-       | hit                            |
-       v                                |
-  allow + cache                         |
-                                        |
-       miss (tail call)                 |
-       v                                |
-  L3 Slow Path                          |
-  trie/map lookup, path/socket/exec     |
-  matching, cache update, event emit    |
-                       |
-                       v
-             BPF ring buffer events
-                       |
-                       v
-                user-space loader
-                       |
-          stdout + /tmp/mcp-guard.sock
-                       |
-                       v
-                     GUI
-```
+![MCPGuard runtime architecture](docs/assets/architecture.svg)
 
 ## Decision Pipeline
 
@@ -215,21 +174,7 @@ starts in an attached L1 program. On an L1 miss, it jumps through a per-hook
 `BPF_MAP_TYPE_PROG_ARRAY` to the matching L2 program. If L2 cannot make a cheap
 decision, it tail-calls the matching L3 slow-path program.
 
-```text
-attached LSM program
-  L1 cache lookup
-    hit  -> return allow/deny/audit
-    miss -> bpf_tail_call(..., L2)
-
-tail-call target
-  L2 cheap decision
-    hit  -> cache + return
-    miss -> bpf_tail_call(..., L3)
-
-tail-call target
-  L3 trie/map policy lookup
-    -> cache + emit event when needed + return
-```
+![MCPGuard L1/L2/L3 decision pipeline](docs/assets/decision-pipeline.svg)
 
 Tail-call program arrays:
 
@@ -328,6 +273,8 @@ include `profile_id` and `agent_id` so the GUI can attribute decisions to the
 right MCP profile.
 
 ## Epoch Invalidation
+
+![MCPGuard epoch invalidation and atomic reload](docs/assets/epoch-reload.svg)
 
 Policy reload does not scan and delete every cache entry. Instead:
 
@@ -756,21 +703,6 @@ L1 hit behavior against the L3 slow path.
 
 - Event timing is emitted for deny/audit events, not every allow event.
 - GUI files are still maturing toward a complete operator dashboard.
-
-## Developer Guides
-
-Loader work:
-
-- `docs/loader-development-guide.md`
-- `docs/loader-development-guide-ko.md`
-
-GUI work:
-
-- `docs/gui-development-guide.md`
-- `docs/gui-development-guide-ko.md`
-
-These documents define the loader/GUI split, socket event contract, development
-tasks, and acceptance criteria so separate developers can work in parallel.
 
 ## License
 

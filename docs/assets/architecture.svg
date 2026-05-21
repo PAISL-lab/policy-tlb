@@ -1,0 +1,133 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="720" viewBox="0 0 1180 720" role="img" aria-labelledby="title desc">
+  <title id="title">MCPGuard system architecture</title>
+  <desc id="desc">A technical block diagram showing local MCP agent activity flowing through Linux syscalls, BPF LSM hooks, the MCPGuard L1 L2 L3 policy pipeline, policy maps, ring buffer output, loader, socket, and GUI.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M1,1 L9,5 L1,9 Z" fill="#263238"/>
+    </marker>
+    <marker id="arrow-muted" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M1,1 L9,5 L1,9 Z" fill="#61717b"/>
+    </marker>
+    <style>
+      .bg { fill: #ffffff; }
+      .title { font: 700 24px Arial, Helvetica, sans-serif; fill: #101820; }
+      .caption { font: 400 13px Arial, Helvetica, sans-serif; fill: #53616b; }
+      .lane-title { font: 700 12px Arial, Helvetica, sans-serif; fill: #45545e; letter-spacing: .05em; }
+      .box-title { font: 700 15px Arial, Helvetica, sans-serif; fill: #101820; }
+      .box-text { font: 400 12px Arial, Helvetica, sans-serif; fill: #394952; }
+      .note { font: 400 11px Arial, Helvetica, sans-serif; fill: #586872; }
+      .box { fill: #ffffff; stroke: #263238; stroke-width: 1.3; }
+      .soft { fill: #f7f9fa; }
+      .kernel { fill: #f3f7f5; stroke: #9aa9a5; stroke-width: 1.1; }
+      .userspace { fill: #f7f8fb; stroke: #a8b0bd; stroke-width: 1.1; }
+      .hot { fill: #fff8e8; stroke: #6e5834; stroke-width: 1.4; }
+      .semi { fill: #eef7f1; stroke: #456b55; stroke-width: 1.4; }
+      .slow { fill: #f6f1f8; stroke: #66506f; stroke-width: 1.4; }
+      .map { fill: #f8fafc; stroke: #4d5b66; stroke-width: 1.2; stroke-dasharray: 5 4; }
+      .event { fill: #fff5f3; stroke: #7b4a43; stroke-width: 1.3; }
+      .line { stroke: #263238; stroke-width: 1.8; fill: none; marker-end: url(#arrow); }
+      .thin { stroke: #61717b; stroke-width: 1.3; fill: none; marker-end: url(#arrow-muted); }
+      .dashed { stroke: #61717b; stroke-width: 1.3; fill: none; stroke-dasharray: 5 5; marker-end: url(#arrow-muted); }
+      .hit { stroke: #3f7a57; stroke-width: 1.7; fill: none; marker-end: url(#arrow); }
+      .miss { stroke: #8a5a26; stroke-width: 1.7; fill: none; marker-end: url(#arrow); }
+      .label { font: 700 11px Arial, Helvetica, sans-serif; fill: #45545e; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1180" height="720"/>
+
+  <text x="44" y="44" class="title">MCPGuard architecture</text>
+  <text x="44" y="66" class="caption">BPF LSM enforcement with a cache-first three-stage policy decision path</text>
+
+  <rect x="40" y="94" width="1100" height="100" rx="4" class="userspace"/>
+  <text x="58" y="119" class="lane-title">USER PROCESS</text>
+
+  <rect x="40" y="224" width="1100" height="308" rx="4" class="kernel"/>
+  <text x="58" y="249" class="lane-title">KERNEL / BPF LSM</text>
+
+  <rect x="40" y="562" width="1100" height="112" rx="4" class="userspace"/>
+  <text x="58" y="587" class="lane-title">USER SPACE CONTROL AND VISIBILITY</text>
+
+  <rect x="72" y="128" width="168" height="46" class="box soft"/>
+  <text x="156" y="148" text-anchor="middle" class="box-title">MCP agent</text>
+  <text x="156" y="166" text-anchor="middle" class="box-text">local tool activity</text>
+
+  <rect x="304" y="128" width="168" height="46" class="box soft"/>
+  <text x="388" y="148" text-anchor="middle" class="box-title">Linux syscall</text>
+  <text x="388" y="166" text-anchor="middle" class="box-text">exec, file, socket</text>
+
+  <rect x="536" y="128" width="168" height="46" class="box soft"/>
+  <text x="620" y="148" text-anchor="middle" class="box-title">LSM hook</text>
+  <text x="620" y="166" text-anchor="middle" class="box-text">attached L1 program</text>
+
+  <path d="M240 151 H294" class="line"/>
+  <path d="M472 151 H526" class="line"/>
+  <path d="M620 174 V214" class="line"/>
+
+  <rect x="92" y="292" width="230" height="86" class="box hot"/>
+  <text x="207" y="319" text-anchor="middle" class="box-title">L1 fast path</text>
+  <text x="207" y="341" text-anchor="middle" class="box-text">decision cache lookup</text>
+  <text x="207" y="360" text-anchor="middle" class="box-text">key: pid, hook, resource id</text>
+
+  <rect x="408" y="292" width="230" height="86" class="box semi"/>
+  <text x="523" y="319" text-anchor="middle" class="box-title">L2 semi-fast path</text>
+  <text x="523" y="341" text-anchor="middle" class="box-text">cheap resource checks</text>
+  <text x="523" y="360" text-anchor="middle" class="box-text">safe cases, cacheable cases</text>
+
+  <rect x="724" y="292" width="230" height="86" class="box slow"/>
+  <text x="839" y="319" text-anchor="middle" class="box-title">L3 slow path</text>
+  <text x="839" y="341" text-anchor="middle" class="box-text">policy matching</text>
+  <text x="839" y="360" text-anchor="middle" class="box-text">path, command, socket rules</text>
+
+  <rect x="982" y="292" width="112" height="86" class="box soft"/>
+  <text x="1038" y="319" text-anchor="middle" class="box-title">Decision</text>
+  <text x="1038" y="342" text-anchor="middle" class="box-text">allow</text>
+  <text x="1038" y="360" text-anchor="middle" class="box-text">deny / audit</text>
+
+  <path d="M620 224 V258 H207 V282" class="line"/>
+  <path d="M322 335 H398" class="miss"/>
+  <text x="360" y="323" text-anchor="middle" class="label">miss</text>
+  <path d="M638 335 H714" class="miss"/>
+  <text x="676" y="323" text-anchor="middle" class="label">miss</text>
+  <path d="M954 335 H972" class="line"/>
+
+  <path d="M207 292 V258 H1038 V282" class="hit"/>
+  <text x="338" y="252" text-anchor="middle" class="label">cache hit</text>
+  <path d="M523 292 V268 H1018 V282" class="hit"/>
+  <text x="698" y="263" text-anchor="middle" class="label">cheap decision</text>
+
+  <rect x="112" y="426" width="232" height="72" class="map"/>
+  <text x="228" y="451" text-anchor="middle" class="box-title">L1 decision cache</text>
+  <text x="228" y="473" text-anchor="middle" class="box-text">epoch-valid allow/deny entries</text>
+
+  <rect x="474" y="426" width="232" height="72" class="map"/>
+  <text x="590" y="451" text-anchor="middle" class="box-title">Policy maps</text>
+  <text x="590" y="473" text-anchor="middle" class="box-text">LPM tries, resource-id indexes</text>
+
+  <rect x="800" y="426" width="232" height="72" class="event"/>
+  <text x="916" y="451" text-anchor="middle" class="box-title">Event and metrics output</text>
+  <text x="916" y="473" text-anchor="middle" class="box-text">ring buffer records, counters</text>
+
+  <path d="M207 378 V416" class="dashed"/>
+  <path d="M228 426 V388" class="dashed"/>
+  <path d="M590 426 C590 396 839 402 839 382" class="dashed"/>
+  <path d="M839 378 C839 398 916 402 916 416" class="thin"/>
+
+  <rect x="154" y="606" width="194" height="44" class="box soft"/>
+  <text x="251" y="626" text-anchor="middle" class="box-title">Policy loader</text>
+  <text x="251" y="644" text-anchor="middle" class="box-text">reload, epoch bump</text>
+
+  <rect x="444" y="606" width="194" height="44" class="box soft"/>
+  <text x="541" y="626" text-anchor="middle" class="box-title">mcp-guard</text>
+  <text x="541" y="644" text-anchor="middle" class="box-text">stdout, socket server</text>
+
+  <rect x="734" y="606" width="194" height="44" class="box soft"/>
+  <text x="831" y="626" text-anchor="middle" class="box-title">GUI / notifier</text>
+  <text x="831" y="644" text-anchor="middle" class="box-text">dashboard, deny popup</text>
+
+  <path d="M251 606 V536 C251 520 590 520 590 498" class="dashed"/>
+  <path d="M916 498 V584 H541 V596" class="thin"/>
+  <path d="M638 628 H724" class="thin"/>
+
+  <text x="44" y="704" class="note">Figure: repeated file read/write activity is expected to return at L1 after the first resource-level slow-path decision.</text>
+</svg>

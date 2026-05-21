@@ -156,55 +156,14 @@ tests/
   test_agent_scope.sh
 
 docs/
-  loader-development-guide*.md
-  gui-development-guide*.md
+  assets/architecture.svg       런타임 아키텍처 다이어그램
+  assets/decision-pipeline.svg  L1/L2/L3 정책 파이프라인 다이어그램
+  assets/epoch-reload.svg       epoch invalidation 및 reload 다이어그램
 ```
 
 ## 아키텍처
 
-```text
-             MCP agent / local process
-                       |
-                       v
-              Linux syscall path
-                       |
-                       v
-                BPF LSM hooks
-                       |
-       +---------------+----------------+
-       |                                |
-       v                                |
-  L1 Fast Path                          |
-  cache lookup                          |
-       | hit                            |
-       v                                |
-  allow / deny                          |
-                                        |
-       miss (tail call)                 |
-       v                                |
-  L2 Semi-Fast Path                     |
-  cheap safe-resource checks            |
-       | hit                            |
-       v                                |
-  allow + cache                         |
-                                        |
-       miss (tail call)                 |
-       v                                |
-  L3 Slow Path                          |
-  trie/map lookup, path/socket/exec     |
-  matching, cache update, event emit    |
-                       |
-                       v
-             BPF ring buffer events
-                       |
-                       v
-                user-space loader
-                       |
-          stdout + /tmp/mcp-guard.sock
-                       |
-                       v
-                     GUI
-```
+![MCPGuard 런타임 아키텍처](docs/assets/architecture.svg)
 
 ## 의사결정 파이프라인
 
@@ -213,21 +172,7 @@ L1 program에서 시작합니다. L1 miss가 발생하면 hook별 `BPF_MAP_TYPE_
 를 통해 해당 L2 program으로 jump합니다. L2가 저비용 결정을 내릴 수 없으면
 해당 L3 slow-path program으로 tail-call합니다.
 
-```text
-attached LSM program
-  L1 cache lookup
-    hit  -> allow/deny/audit 반환
-    miss -> bpf_tail_call(..., L2)
-
-tail-call target
-  L2 cheap decision
-    hit  -> cache + return
-    miss -> bpf_tail_call(..., L3)
-
-tail-call target
-  L3 trie/map policy lookup
-    -> cache + 필요 시 event emit + return
-```
+![MCPGuard L1/L2/L3 의사결정 파이프라인](docs/assets/decision-pipeline.svg)
 
 Tail-call program array:
 
@@ -326,6 +271,8 @@ emitted event에는 `profile_id`와 `agent_id`가 포함되어 GUI가 결정을 
 profile에 연결할 수 있습니다.
 
 ## Epoch Invalidation
+
+![MCPGuard epoch invalidation 및 atomic reload](docs/assets/epoch-reload.svg)
 
 Policy reload는 모든 cache entry를 scan하고 삭제하지 않습니다. 대신 다음
 순서로 동작합니다.
@@ -750,21 +697,6 @@ event preparation, ring buffer submission도 포함합니다. 따라서 L3 event
 - Event timing은 deny/audit event에 대해 emit되며, 모든 allow event에 대해
   emit되지는 않습니다.
 - GUI 파일은 완전한 operator dashboard를 향해 개발 중입니다.
-
-## 개발 가이드
-
-Loader 작업:
-
-- `docs/loader-development-guide.md`
-- `docs/loader-development-guide-ko.md`
-
-GUI 작업:
-
-- `docs/gui-development-guide.md`
-- `docs/gui-development-guide-ko.md`
-
-이 문서들은 loader/GUI 분리, socket event contract, 개발 task, acceptance
-criteria를 정의해 여러 개발자가 병렬로 작업할 수 있게 합니다.
 
 ## 라이선스
 
