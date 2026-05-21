@@ -64,7 +64,9 @@ captures those lines in `guard.log`, extracts them into JSON/CSV, and aggregates
 them with Python tools. End-to-end elapsed time is collected separately with
 `/usr/bin/time -v`.
 
-본 실험의 latency는 eBPF hook 내부의 정책 판단 경로에서 측정된 값이며, 전체 시스템 콜 수행 시간 또는 사용자 애플리케이션의 전체 응답 시간을 의미하지 않는다.
+The latency reported by this experiment is measured inside the eBPF hook policy
+decision path. It does not represent full system-call latency or the complete
+response time of a user application.
 
 ## Result Interpretation
 

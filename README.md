@@ -1,6 +1,6 @@
 # MCP eBPF Guard
 
-[한국어 문서](README-ko.md)
+[Korean README](README-ko.md)
 
 MCP eBPF Guard is a runtime security framework for local Model Context Protocol
 (MCP) agents. It uses BPF LSM hooks and a TLB-hit-modeled 3-tier decision

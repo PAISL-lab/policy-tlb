@@ -48,11 +48,16 @@ intact because the project targets real Linux MCP agent deployments.
 - Record load average, governor, kernel, compiler, BPF JIT, and policy hashes.
 - Keep per-event raw logging disabled in default experiments.
 
-일반 데스크톱 Linux 환경에서는 스케줄러, 인터럽트, 캐시 상태, 온도, 백그라운드 작업을 완전히 제거할 수 없으므로, 본 연구는 CPU governor, core pinning, 동일 workload, 동일 policy, 반복 측정을 통해 가능한 범위에서 변수를 통제하였다.
+On a general-purpose desktop Linux system, scheduler behavior, interrupts, cache
+state, temperature, and background work cannot be fully eliminated. This study
+therefore controls variables where practical by using the same CPU governor,
+core pinning, workload, policy, and repeated measurements.
 
 ## Paper Caveat
 
-본 실험의 latency는 eBPF hook 내부의 정책 판단 경로에서 측정된 값이며, 전체 시스템 콜 수행 시간 또는 사용자 애플리케이션의 전체 응답 시간을 의미하지 않는다.
+The latency reported by this experiment is measured inside the eBPF hook policy
+decision path. It does not represent full system-call latency or the complete
+response time of a user application.
 
 When reporting percentiles from the default metrics, state that p50/p95/p99 are
 histogram-bucket approximations unless a dedicated debug-mode raw event trace is
