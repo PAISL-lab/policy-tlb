@@ -1,6 +1,6 @@
 <!-- SPDX-License-Identifier: CC-BY-4.0 -->
 
-# MCP eBPF Guard
+# PolicyTLB: MCP eBPF Guard
 
 [Korean README](README-ko.md)
 
