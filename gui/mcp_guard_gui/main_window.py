@@ -4,13 +4,16 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QCheckBox,
     QComboBox,
     QFormLayout,
     QFrame,
     QGridLayout,
+    QGraphicsDropShadowEffect,
     QGroupBox,
     QHeaderView,
     QHBoxLayout,
@@ -19,8 +22,10 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QPlainTextEdit,
     QProgressBar,
+    QPushButton,
     QSplitter,
     QStatusBar,
+    QStyle,
     QTableWidget,
     QTableWidgetItem,
     QTableView,
@@ -44,6 +49,7 @@ class MainWindow(QMainWindow):
     ) -> None:
         super().__init__()
         self.setWindowTitle("MCP Guard")
+        self.setMinimumSize(1120, 720)
         self.socket_path = socket_path
         self.store = EventStore(max_events=max_events)
         self.model = EventTableModel(self.store)
@@ -51,6 +57,8 @@ class MainWindow(QMainWindow):
         self.metrics = MetricsSnapshot()
         self.alerts = AlertManager(self)
         self.alerts.enabled = popups_enabled
+        self.selected_event: EventRecord | None = None
+        self._queued_events: list[dict[str, Any]] = []
 
         self.connection_dashboard_label = QLabel("disconnected")
         self.connection_runtime_label = QLabel("disconnected")
@@ -81,6 +89,9 @@ class MainWindow(QMainWindow):
         self.filter_count_label = QLabel("0 shown")
         self.filter_count_label.setObjectName("filterCount")
         self.filter_count_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.queue_label = QLabel("Live")
+        self.queue_label.setObjectName("queueState")
+        self.queue_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.detail_heading = QLabel("Event details")
         self.detail_heading.setObjectName("detailHeading")
         self.detail_summary = QLabel("Select an event to inspect raw JSON and timing details.")
@@ -109,6 +120,32 @@ class MainWindow(QMainWindow):
         for toggle in (self.popup_toggle, self.runtime_popup_toggle):
             toggle.setChecked(popups_enabled)
             toggle.toggled.connect(self._toggle_popups)
+        self.pause_toggle = QCheckBox("Pause stream")
+        self.pause_toggle.setToolTip("Hold incoming events without adding them to the table.")
+        self.pause_toggle.toggled.connect(self._toggle_pause)
+        self.follow_toggle = QCheckBox("Follow latest")
+        self.follow_toggle.setToolTip("Keep event tables scrolled to the newest visible row.")
+        self.follow_toggle.setChecked(True)
+
+        self.clear_filters_button = self._toolbar_button(
+            "Reset",
+            QStyle.StandardPixmap.SP_BrowserReload,
+            "Clear all event filters.",
+        )
+        self.clear_filters_button.clicked.connect(self._clear_filters)
+        self.latest_button = self._toolbar_button(
+            "Newest",
+            QStyle.StandardPixmap.SP_ArrowDown,
+            "Select the newest visible event.",
+        )
+        self.latest_button.clicked.connect(self._select_latest_event)
+        self.copy_detail_button = self._toolbar_button(
+            "Copy JSON",
+            QStyle.StandardPixmap.SP_DialogSaveButton,
+            "Copy the selected event JSON to the clipboard.",
+        )
+        self.copy_detail_button.setEnabled(False)
+        self.copy_detail_button.clicked.connect(self._copy_detail_json)
 
         self.detail = QPlainTextEdit()
         self.detail.setReadOnly(True)
@@ -156,6 +193,7 @@ class MainWindow(QMainWindow):
 
     def _build_ui(self) -> None:
         tabs = QTabWidget()
+        tabs.setObjectName("mainTabs")
         tabs.setDocumentMode(True)
         tabs.addTab(self._dashboard_tab(), "Dashboard")
         tabs.addTab(self._events_tab(), "Events")
@@ -183,12 +221,14 @@ class MainWindow(QMainWindow):
 
     def _dashboard_tab(self) -> QWidget:
         tab = QWidget()
+        tab.setObjectName("page")
         layout = QVBoxLayout(tab)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(12)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(14)
         layout.addWidget(self._dashboard_header())
         layout.addWidget(self._summary_panel())
         lower = QHBoxLayout()
+        lower.setSpacing(14)
         lower.addWidget(self._layer_panel(), 1)
         lower.addWidget(self._latest_panel(), 2)
         layout.addLayout(lower)
@@ -198,15 +238,22 @@ class MainWindow(QMainWindow):
     def _dashboard_header(self) -> QWidget:
         header = QFrame()
         header.setObjectName("dashboardHeader")
+        self._add_shadow(header, y_offset=12, blur_radius=28, color=QColor(15, 23, 42, 48))
         layout = QHBoxLayout(header)
-        layout.setContentsMargins(18, 14, 18, 14)
+        layout.setContentsMargins(22, 18, 22, 18)
+        layout.setSpacing(16)
+        accent = QFrame()
+        accent.setObjectName("headerAccent")
+        accent.setFixedSize(4, 54)
         title_col = QVBoxLayout()
+        title_col.setSpacing(4)
         title = QLabel("MCP Guard Runtime")
         title.setObjectName("dashboardTitle")
-        subtitle = QLabel(f"Local enforcement telemetry / {self.socket_path}")
+        subtitle = QLabel(f"Local enforcement telemetry  |  {self.socket_path}")
         subtitle.setObjectName("dashboardSubtitle")
         title_col.addWidget(title)
         title_col.addWidget(subtitle)
+        layout.addWidget(accent)
         layout.addLayout(title_col)
         layout.addStretch(1)
         layout.addWidget(self.posture_label)
@@ -217,8 +264,8 @@ class MainWindow(QMainWindow):
         panel = QFrame()
         panel.setObjectName("cardBand")
         layout = QHBoxLayout(panel)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(10)
+        layout.setContentsMargins(2, 2, 2, 10)
+        layout.setSpacing(12)
         cards = [
             ("Connection", self.connection_dashboard_label, "Live loader state", "statCard"),
             ("Events", self.total_label, "Recent buffered events", "statCard"),
@@ -234,8 +281,11 @@ class MainWindow(QMainWindow):
     def _stat_card(self, title: str, value: QLabel, caption: str, object_name: str) -> QWidget:
         card = QFrame()
         card.setObjectName(object_name)
+        card.setMinimumHeight(96)
+        self._add_shadow(card)
         card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(12, 10, 12, 10)
+        card_layout.setContentsMargins(14, 12, 14, 12)
+        card_layout.setSpacing(4)
         title_label = QLabel(title)
         title_label.setObjectName("statTitle")
         caption_label = QLabel(caption)
@@ -247,10 +297,15 @@ class MainWindow(QMainWindow):
 
     def _layer_panel(self) -> QWidget:
         box = QGroupBox("Layer distribution")
+        box.setObjectName("surfaceGroup")
+        self._add_shadow(box)
         layout = QVBoxLayout(box)
+        layout.setContentsMargins(14, 20, 14, 14)
+        layout.setSpacing(10)
         layout.addWidget(self.layer_label)
         for layer in ("L1", "L2", "L3"):
             row = QHBoxLayout()
+            row.setSpacing(10)
             label = QLabel(layer)
             label.setObjectName("filterLabel")
             bar = QProgressBar()
@@ -266,7 +321,11 @@ class MainWindow(QMainWindow):
 
     def _latest_panel(self) -> QWidget:
         latest = QGroupBox("Latest high-risk event")
+        latest.setObjectName("surfaceGroup")
+        self._add_shadow(latest)
         latest_layout = QVBoxLayout(latest)
+        latest_layout.setContentsMargins(16, 22, 16, 16)
+        latest_layout.setSpacing(8)
         latest_layout.addWidget(self.latest_action_label)
         latest_layout.addWidget(self.latest_target_label)
         latest_layout.addWidget(self.latest_meta_label)
@@ -275,8 +334,12 @@ class MainWindow(QMainWindow):
 
     def _recent_panel(self) -> QWidget:
         recent = QGroupBox("Recent events")
+        recent.setObjectName("surfaceGroup")
+        self._add_shadow(recent)
         layout = QVBoxLayout(recent)
-        hint = QLabel("Newest security decisions, color-coded by action")
+        layout.setContentsMargins(14, 22, 14, 14)
+        layout.setSpacing(10)
+        hint = QLabel("Newest security decisions")
         hint.setObjectName("sectionHint")
         layout.addWidget(hint)
         layout.addWidget(self.dashboard_table)
@@ -284,9 +347,10 @@ class MainWindow(QMainWindow):
 
     def _events_tab(self) -> QWidget:
         tab = QWidget()
+        tab.setObjectName("page")
         layout = QVBoxLayout(tab)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(10)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(12)
         layout.addWidget(self._filter_bar())
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(self.table)
@@ -298,10 +362,15 @@ class MainWindow(QMainWindow):
     def _detail_panel(self) -> QWidget:
         panel = QFrame()
         panel.setObjectName("detailPanel")
+        self._add_shadow(panel)
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(8)
-        layout.addWidget(self.detail_heading)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(10)
+        heading_row = QHBoxLayout()
+        heading_row.addWidget(self.detail_heading)
+        heading_row.addStretch(1)
+        heading_row.addWidget(self.copy_detail_button)
+        layout.addLayout(heading_row)
         layout.addWidget(self.detail_summary)
         layout.addWidget(self.detail, 1)
         return panel
@@ -309,10 +378,15 @@ class MainWindow(QMainWindow):
     def _filter_bar(self) -> QWidget:
         bar = QFrame()
         bar.setObjectName("filterBar")
-        bar.setFixedHeight(54)
-        layout = QHBoxLayout(bar)
-        layout.setContentsMargins(10, 8, 10, 8)
+        self._add_shadow(bar)
+        bar.setFixedHeight(96)
+        layout = QVBoxLayout(bar)
+        layout.setContentsMargins(14, 10, 14, 10)
         layout.setSpacing(8)
+        filter_row = QHBoxLayout()
+        filter_row.setSpacing(9)
+        action_row = QHBoxLayout()
+        action_row.setSpacing(9)
         self.action_filter = self._combo(["all", "allow", "deny", "audit"])
         self.hook_filter = self._combo(
             ["all", "exec", "file_open", "file_read", "file_write", "socket_connect"]
@@ -334,10 +408,16 @@ class MainWindow(QMainWindow):
         ):
             label = QLabel(label_text)
             label.setObjectName("filterLabel")
-            layout.addWidget(label)
-            layout.addWidget(widget)
-        layout.addStretch(1)
-        layout.addWidget(self.filter_count_label)
+            filter_row.addWidget(label)
+            filter_row.addWidget(widget)
+        filter_row.addStretch(1)
+        action_row.addWidget(self.pause_toggle)
+        action_row.addWidget(self.follow_toggle)
+        action_row.addWidget(self.clear_filters_button)
+        action_row.addWidget(self.latest_button)
+        action_row.addStretch(1)
+        action_row.addWidget(self.queue_label)
+        action_row.addWidget(self.filter_count_label)
         for widget in (
             self.action_filter,
             self.hook_filter,
@@ -348,6 +428,8 @@ class MainWindow(QMainWindow):
         ):
             widget.setMinimumWidth(86)
             widget.setMaximumHeight(30)
+        layout.addLayout(filter_row)
+        layout.addLayout(action_row)
         self.action_filter.currentTextChanged.connect(self._apply_filters)
         self.hook_filter.currentTextChanged.connect(self._apply_filters)
         self.layer_filter.currentTextChanged.connect(self._apply_filters)
@@ -356,6 +438,19 @@ class MainWindow(QMainWindow):
         self.search_filter.textChanged.connect(self._apply_filters)
         return bar
 
+    def _toolbar_button(
+        self,
+        text: str,
+        icon: QStyle.StandardPixmap,
+        tooltip: str,
+    ) -> QPushButton:
+        button = QPushButton(text)
+        button.setObjectName("toolbarButton")
+        button.setIcon(self.style().standardIcon(icon))
+        button.setToolTip(tooltip)
+        button.setMaximumHeight(30)
+        return button
+
     def _combo(self, values: list[str]) -> QComboBox:
         combo = QComboBox()
         combo.addItems(values)
@@ -363,13 +458,18 @@ class MainWindow(QMainWindow):
 
     def _metrics_tab(self) -> QWidget:
         tab = QWidget()
+        tab.setObjectName("page")
         layout = QVBoxLayout(tab)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(12)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(14)
         summary = QFrame()
         summary.setObjectName("metricsPanel")
+        self._add_shadow(summary)
         summary_layout = QVBoxLayout(summary)
-        summary_layout.addWidget(QLabel("Metrics"))
+        summary_layout.setContentsMargins(16, 14, 16, 14)
+        metrics_title = QLabel("Metrics")
+        metrics_title.setObjectName("panelTitle")
+        summary_layout.addWidget(metrics_title)
         summary_layout.addWidget(self.metrics_summary_label)
         layout.addWidget(summary)
         layout.addWidget(self.metrics_table)
@@ -377,10 +477,15 @@ class MainWindow(QMainWindow):
 
     def _runtime_tab(self) -> QWidget:
         tab = QWidget()
+        tab.setObjectName("page")
         layout = QVBoxLayout(tab)
-        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setContentsMargins(20, 18, 20, 18)
         form_box = QGroupBox("Runtime")
+        form_box.setObjectName("surfaceGroup")
+        self._add_shadow(form_box)
         form = QFormLayout(form_box)
+        form.setContentsMargins(16, 24, 16, 16)
+        form.setSpacing(12)
         form.addRow("Socket", QLabel(self.socket_path))
         form.addRow("Connection", self.connection_runtime_label)
         form.addRow("Last error", self.error_label)
@@ -390,12 +495,38 @@ class MainWindow(QMainWindow):
         layout.addStretch(1)
         return tab
 
+    def _add_shadow(
+        self,
+        widget: QWidget,
+        *,
+        y_offset: int = 8,
+        blur_radius: int = 20,
+        color: QColor = QColor(15, 23, 42, 28),
+    ) -> None:
+        shadow = QGraphicsDropShadowEffect(widget)
+        shadow.setBlurRadius(blur_radius)
+        shadow.setOffset(0, y_offset)
+        shadow.setColor(color)
+        widget.setGraphicsEffect(shadow)
+
     def _add_event(self, payload: dict[str, Any]) -> None:
+        if self.pause_toggle.isChecked():
+            self._queued_events.append(dict(payload))
+            if len(self._queued_events) > self.store.max_events:
+                self._queued_events.pop(0)
+            self._update_queue_label()
+            return
+        self._ingest_event(payload)
+
+    def _ingest_event(self, payload: dict[str, Any]) -> EventRecord:
         event = self.model.add_payload(payload)
         self._update_dashboard()
         self._update_filter_count()
+        if self.follow_toggle.isChecked():
+            self._scroll_to_latest()
         if event.action == "deny":
             self.alerts.show_event(event)
+        return event
 
     def _metrics_received(self, payload: dict[str, Any]) -> None:
         self.metrics = MetricsSnapshot.from_payload(payload)
@@ -437,6 +568,53 @@ class MainWindow(QMainWindow):
                 toggle.setChecked(enabled)
                 toggle.blockSignals(False)
 
+    def _toggle_pause(self, paused: bool) -> None:
+        if paused:
+            self._update_queue_label()
+            self.statusBar().showMessage("Event stream paused", 2500)
+            return
+        queued = list(self._queued_events)
+        self._queued_events.clear()
+        for payload in queued:
+            self._ingest_event(payload)
+        self._update_queue_label()
+        if queued:
+            self.statusBar().showMessage(f"Added {len(queued)} queued events", 3000)
+
+    def _update_queue_label(self) -> None:
+        queued = len(self._queued_events)
+        if self.pause_toggle.isChecked():
+            self.queue_label.setText(f"Paused / {queued} queued")
+            self.queue_label.setProperty("state", "paused")
+        else:
+            self.queue_label.setText("Live")
+            self.queue_label.setProperty("state", "live")
+        self.queue_label.style().unpolish(self.queue_label)
+        self.queue_label.style().polish(self.queue_label)
+
+    def _clear_filters(self) -> None:
+        widgets = [
+            self.action_filter,
+            self.hook_filter,
+            self.layer_filter,
+            self.profile_filter,
+            self.agent_filter,
+            self.search_filter,
+        ]
+        for widget in widgets:
+            widget.blockSignals(True)
+        self.action_filter.setCurrentText("all")
+        self.hook_filter.setCurrentText("all")
+        self.layer_filter.setCurrentText("all")
+        self.profile_filter.clear()
+        self.agent_filter.clear()
+        self.search_filter.clear()
+        for widget in widgets:
+            widget.blockSignals(False)
+        self._apply_filters()
+        self._scroll_to_latest()
+        self.statusBar().showMessage("Filters reset", 2000)
+
     def _apply_filters(self) -> None:
         profile = self.profile_filter.text().strip() or "all"
         agent = self.agent_filter.text().strip() or "all"
@@ -449,11 +627,33 @@ class MainWindow(QMainWindow):
             text=self.search_filter.text(),
         )
         self._update_filter_count()
+        if self.follow_toggle.isChecked():
+            self._scroll_to_latest()
 
     def _update_filter_count(self) -> None:
         self.filter_count_label.setText(
             f"{self.model.rowCount()} shown / {len(self.store.events)} total"
         )
+
+    def _select_latest_event(self) -> None:
+        if self.model.rowCount() == 0:
+            self.statusBar().showMessage("No visible events", 2000)
+            return
+        row = self.model.rowCount() - 1
+        self.table.selectRow(row)
+        self.table.scrollTo(self.model.index(row, 0), QAbstractItemView.ScrollHint.PositionAtCenter)
+        self.dashboard_table.selectRow(row)
+        self.dashboard_table.scrollTo(
+            self.model.index(row, 0),
+            QAbstractItemView.ScrollHint.PositionAtCenter,
+        )
+        self.statusBar().showMessage("Newest visible event selected", 2000)
+
+    def _scroll_to_latest(self) -> None:
+        if self.model.rowCount() == 0:
+            return
+        self.table.scrollToBottom()
+        self.dashboard_table.scrollToBottom()
 
     def _update_dashboard(self) -> None:
         self.total_label.setText(str(len(self.store.events)))
@@ -538,6 +738,8 @@ class MainWindow(QMainWindow):
         self._show_detail(event)
 
     def _show_detail(self, event: EventRecord) -> None:
+        self.selected_event = event
+        self.copy_detail_button.setEnabled(True)
         pretty = json.dumps(event.raw, indent=2, ensure_ascii=False)
         self.detail_heading.setText(f"{event.action.upper()} / {event.hook}")
         self.detail_summary.setText(
@@ -553,3 +755,12 @@ class MainWindow(QMainWindow):
             f"agent_id={event.agent_id}\n"
             f"resource_id={event.resource_id}"
         )
+
+    def _copy_detail_json(self) -> None:
+        if not self.selected_event:
+            self.statusBar().showMessage("Select an event first", 2000)
+            return
+        QApplication.clipboard().setText(
+            json.dumps(self.selected_event.raw, indent=2, ensure_ascii=False)
+        )
+        self.statusBar().showMessage("Event JSON copied", 2000)
