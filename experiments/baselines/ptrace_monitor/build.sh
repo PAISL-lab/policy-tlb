@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
-BUILD_DIR="${REPO_ROOT}/experiments/baselines/build/ptrace_monitor"
+BUILD_DIR="${BASELINE_PTRACE_BUILD_DIR:-${REPO_ROOT}/experiments/baselines/build/ptrace_monitor}"
 CC="${CC:-cc}"
 
 mkdir -p "${BUILD_DIR}"

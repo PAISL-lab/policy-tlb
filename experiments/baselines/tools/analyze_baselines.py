@@ -31,7 +31,7 @@ def parse_elapsed(path: Path) -> dict[str, float | str]:
     for line in text.splitlines():
         stripped = line.strip()
         if stripped.startswith("Elapsed (wall clock) time"):
-            value = stripped.split(":", 1)[1].strip()
+            value = stripped.rsplit(":", 1)[1].strip()
             row["elapsed_raw"] = value
             row["elapsed_sec"] = time_to_seconds(value)
         elif stripped.startswith("User time (seconds):"):

@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
-BUILD_DIR="${REPO_ROOT}/experiments/baselines/build/naive_ebpf_lsm"
+BUILD_DIR="${BASELINE_NAIVE_BUILD_DIR:-${REPO_ROOT}/experiments/baselines/build/naive_ebpf_lsm}"
 
 CLANG="${CLANG:-clang}"
 CC="${CC:-cc}"

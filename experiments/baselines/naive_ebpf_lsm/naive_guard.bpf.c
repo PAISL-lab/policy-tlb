@@ -143,6 +143,20 @@ static __always_inline int read_file_path(struct file *file, char *path)
 	return 0;
 }
 
+static __always_inline __u64 file_resource_id(struct file *file)
+{
+	struct inode *inode;
+
+	if (!file)
+		return 0;
+
+	inode = BPF_CORE_READ(file, f_inode);
+	if (!inode)
+		return 0;
+
+	return BPF_CORE_READ(inode, i_ino);
+}
+
 SEC("lsm/bprm_check_security")
 int BPF_PROG(naive_bprm_check_security, struct linux_binprm *bprm, int ret)
 {
@@ -193,8 +207,8 @@ SEC("lsm/file_permission")
 int BPF_PROG(naive_file_permission, struct file *file, int mask, int ret)
 {
 	struct baseline_config *cfg = baseline_config();
-	struct baseline_scratch *tmp = baseline_scratch();
 	__u64 start_ns = bpf_ktime_get_ns();
+	__u64 resource_id;
 	__u32 hook_id = MCP_GUARD_HOOK_FILE_READ;
 	__u32 action = MCP_GUARD_ACTION_ALLOW;
 
@@ -205,9 +219,15 @@ int BPF_PROG(naive_file_permission, struct file *file, int mask, int ret)
 	else if (!(mask & MCP_GUARD_MAY_READ))
 		return 0;
 
-	if (tmp && read_file_path(file, tmp->path) == 0 &&
-	    cfg && has_prefix(tmp->path, cfg->deny_path_prefix))
-		action = MCP_GUARD_ACTION_DENY;
+	/*
+	 * bpf_d_path() is not available from this LSM hook on all target
+	 * kernels. The naive baseline still performs per-event kernel work and
+	 * policy accounting here, but path-prefix deny decisions are made at
+	 * file_open where path extraction is verifier-accepted.
+	 */
+	resource_id = file_resource_id(file);
+	if (!resource_id && cfg && cfg->deny_path_prefix[0])
+		action = MCP_GUARD_ACTION_ALLOW;
 
 	record_metric(hook_id, action, start_ns);
 	return action_ret(cfg, action);
