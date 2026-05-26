@@ -1,5 +1,7 @@
 <!-- SPDX-License-Identifier: CC-BY-4.0 -->
 
+Patent pending in Korea: KR Patent Application No. 10-2026-0094311
+
 # PolicyTLB: MCP eBPF Guard
 
 [Korean README](README-ko.md)
