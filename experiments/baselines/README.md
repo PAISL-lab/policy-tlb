@@ -11,13 +11,17 @@ The comparison modes are:
 | Mode | Purpose | Enforcement semantics |
 |---|---|---|
 | `no_guard` | End-to-end workload baseline without MCPGuard | No security enforcement |
-| `naive_ebpf_lsm` | Cacheless eBPF LSM baseline | BPF LSM hooks run a simple policy check on every event |
+| `naive_ebpf_lsm` | Cacheless eBPF LSM policy baseline | BPF LSM hooks evaluate the same command, path-prefix, resource-id, and socket-port policy classes on every event |
 | `mcpguard` | Proposed system | Existing MCPGuard binary and policy directory |
 | `ptrace_monitor` | Traditional user-space syscall tracing baseline | Monitoring/interposition baseline, not equivalent to BPF LSM |
 
 The naive eBPF LSM baseline is a separate BPF object and separate loader. It
 uses the same hook class as MCPGuard but does not use MCPGuard's L1 cache, L2
 fast path, resource-id follow-up cache, tail-call pipeline, or epoch reuse.
+Instead, it loads an independent rule map that mirrors the default command,
+path, and socket policy classes and performs cacheless rule/map lookup in L3 for
+each observed hook event. For follow-up `file_read`/`file_write` events, it uses
+a resource-id policy map as a policy index, not as a per-process decision cache.
 
 ## Run
 
@@ -67,7 +71,8 @@ The generated tables include:
 
 The `naive_ebpf_lsm` mode is the primary technical baseline for MCPGuard because
 it uses BPF LSM hooks and kernel-side enforcement but removes the cache and
-pipeline optimizations.
+pipeline optimizations. It is intended to represent a cacheless eBPF LSM policy
+engine, not a minimal hook counter.
 
 The `ptrace_monitor` mode is included as a secondary traditional syscall
 monitoring baseline. It is useful for overhead comparison, but it should not be

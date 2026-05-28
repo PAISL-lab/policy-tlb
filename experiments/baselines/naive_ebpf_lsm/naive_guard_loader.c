@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include <linux/types.h>
+#include <arpa/inet.h>
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
 #include <errno.h>
@@ -9,19 +10,19 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/resource.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "include/common.h"
 #include "include/event.h"
+#include "include/policy.h"
 #include "naive_guard.skel.h"
-
-#define BASELINE_PREFIX_LEN MCP_GUARD_RULE_VALUE_LEN
 
 struct baseline_config {
 	__u32 enforce;
-	__u32 deny_port;
-	char deny_exec_prefix[BASELINE_PREFIX_LEN];
-	char deny_path_prefix[BASELINE_PREFIX_LEN];
+	__u32 default_action;
+	__u32 active_generation;
+	__u32 reserved;
 };
 
 static volatile sig_atomic_t exiting;
@@ -96,14 +97,13 @@ static void decode_metric_index(__u32 index, __u32 *hook, __u32 *layer,
 	*action = index & 0x3;
 }
 
-static void copy_env_string(char *dst, size_t dst_size, const char *name,
-			    const char *fallback)
+static __u64 path_resource_id(const char *value)
 {
-	const char *value = getenv(name);
+	struct stat st;
 
-	if (!value || !value[0])
-		value = fallback;
-	snprintf(dst, dst_size, "%s", value ? value : "");
+	if (!value || stat(value, &st) != 0)
+		return 0;
+	return (__u64)st.st_ino;
 }
 
 static __u32 env_u32(const char *name, __u32 fallback)
@@ -121,18 +121,193 @@ static __u32 env_u32(const char *name, __u32 fallback)
 	return (__u32)parsed;
 }
 
-static int configure_policy(int config_fd)
+static __u32 path_prefix_bits(const char *path)
+{
+	return 32 + (__u32)strnlen(path, MCP_GUARD_PATH_LPM_LEN) * 8;
+}
+
+static __u32 command_prefix_bits(const char *command)
+{
+	return 32 + (__u32)strnlen(command, MCP_GUARD_RULE_VALUE_LEN) * 8;
+}
+
+static __u32 ipv4_prefix_bits(__u32 mask)
+{
+	__u32 host_mask = ntohl(mask);
+	__u32 bits = 0;
+
+	for (__u32 i = 0; i < 32; i++) {
+		if (!(host_mask & (1U << (31 - i))))
+			break;
+		bits++;
+	}
+	return 32 + 32 + bits;
+}
+
+static int parse_ipv4_cidr(const char *value, __u32 *addr, __u32 *mask)
+{
+	char copy[64];
+	char *slash;
+	int prefix = 32;
+	struct in_addr parsed;
+	__u32 host_mask;
+
+	if (!value || !addr || !mask)
+		return -EINVAL;
+	snprintf(copy, sizeof(copy), "%s", value);
+	slash = strchr(copy, '/');
+	if (slash) {
+		*slash++ = 0;
+		prefix = atoi(slash);
+		if (prefix < 0 || prefix > 32)
+			return -EINVAL;
+	}
+
+	if (inet_pton(AF_INET, copy, &parsed) != 1)
+		return -EINVAL;
+
+	host_mask = prefix == 0 ? 0 : 0xffffffffU << (32 - prefix);
+	*addr = parsed.s_addr;
+	*mask = htonl(host_mask);
+	return 0;
+}
+
+static void fill_indexed_value(struct mcp_indexed_policy_value *value,
+			       __u32 rule_id, __u32 rule_type, __u32 hook_mask,
+			       __u32 action, const char *rule_value,
+			       __u32 port, __u32 ipv4_addr, __u32 ipv4_mask,
+			       __u64 resource_id)
+{
+	memset(value, 0, sizeof(*value));
+	value->enabled = 1;
+	value->rule_id = rule_id;
+	value->action = action;
+	value->hook_mask = hook_mask;
+	value->value_len = rule_value ? strnlen(rule_value, MCP_GUARD_RULE_VALUE_LEN) : 0;
+	value->port = port;
+	value->ipv4_addr = ipv4_addr;
+	value->ipv4_mask = ipv4_mask;
+	value->resource_id = resource_id;
+	snprintf(value->name, sizeof(value->name), "baseline-rule-%u", rule_id);
+	(void)rule_type;
+}
+
+static int put_command_rule(int command_fd, __u32 rule_id, const char *command)
+{
+	struct mcp_command_lpm_key key = {};
+	struct mcp_indexed_policy_value value = {};
+
+	key.prefixlen = command_prefix_bits(command);
+	key.generation = 1;
+	snprintf(key.command, sizeof(key.command), "%s", command);
+	fill_indexed_value(&value, rule_id, MCP_GUARD_RULE_COMMAND_PREFIX,
+			   mcp_guard_hook_mask(MCP_GUARD_HOOK_EXEC),
+			   MCP_GUARD_ACTION_DENY, command, 0, 0, 0, 0);
+	if (bpf_map_update_elem(command_fd, &key, &value, BPF_ANY) != 0)
+		return -errno;
+	return 0;
+}
+
+static int put_path_rule(int path_fd, int resource_fd, __u32 rule_id,
+			 const char *path)
+{
+	struct mcp_path_lpm_key path_key = {};
+	struct mcp_path_policy_value path_value = {};
+	__u64 resource_id = path_resource_id(path);
+	__u32 hook_mask = mcp_guard_hook_mask(MCP_GUARD_HOOK_FILE_OPEN) |
+			  mcp_guard_hook_mask(MCP_GUARD_HOOK_FILE_READ) |
+			  mcp_guard_hook_mask(MCP_GUARD_HOOK_FILE_WRITE);
+
+	path_key.prefixlen = path_prefix_bits(path);
+	path_key.generation = 1;
+	memcpy(path_key.path, path, strnlen(path, sizeof(path_key.path)));
+	path_value.enabled = 1;
+	path_value.rule_id = rule_id;
+	path_value.action = MCP_GUARD_ACTION_DENY;
+	path_value.hook_mask = hook_mask;
+	path_value.value_len = strnlen(path, MCP_GUARD_RULE_VALUE_LEN);
+	path_value.resource_id = resource_id;
+	snprintf(path_value.name, sizeof(path_value.name), "baseline-rule-%u", rule_id);
+	if (bpf_map_update_elem(path_fd, &path_key, &path_value, BPF_ANY) != 0)
+		return -errno;
+
+	if (resource_id) {
+		struct mcp_resource_policy_key resource_key = {};
+		struct mcp_indexed_policy_value resource_value = {};
+
+		resource_key.generation = 1;
+		resource_key.rule_type = MCP_GUARD_RULE_PATH_PREFIX;
+		resource_key.resource_id = resource_id;
+		fill_indexed_value(&resource_value, rule_id, MCP_GUARD_RULE_PATH_PREFIX,
+				   hook_mask, MCP_GUARD_ACTION_DENY, path, 0,
+				   0, 0, resource_id);
+		if (bpf_map_update_elem(resource_fd, &resource_key, &resource_value,
+					BPF_ANY) != 0)
+			return -errno;
+	}
+	return 0;
+}
+
+static int put_network_rule(int network_fd, __u32 rule_id, const char *cidr,
+			    __u32 port)
+{
+	struct mcp_network_lpm_key key = {};
+	struct mcp_indexed_policy_value value = {};
+	__u32 ipv4_addr = 0;
+	__u32 ipv4_mask = 0;
+	int err;
+
+	err = parse_ipv4_cidr(cidr, &ipv4_addr, &ipv4_mask);
+	if (err)
+		return err;
+
+	key.prefixlen = ipv4_prefix_bits(ipv4_mask);
+	key.generation = 1;
+	key.port = port;
+	key.ipv4_addr = ipv4_addr;
+	fill_indexed_value(&value, rule_id, MCP_GUARD_RULE_IPV4_CONNECT,
+			   mcp_guard_hook_mask(MCP_GUARD_HOOK_SOCKET_CONNECT),
+			   MCP_GUARD_ACTION_DENY, cidr, port, ipv4_addr,
+			   ipv4_mask, 0);
+	if (bpf_map_update_elem(network_fd, &key, &value, BPF_ANY) != 0)
+		return -errno;
+	return 0;
+}
+
+static int configure_policy(int config_fd, int path_fd, int command_fd,
+			    int network_fd, int resource_fd)
 {
 	struct baseline_config cfg = {};
 	__u32 key = 0;
+	__u32 rule_id = 1;
+	int err;
 
 	cfg.enforce = env_u32("NAIVE_EBPF_ENFORCE", 1);
-	cfg.deny_port = env_u32("NAIVE_EBPF_DENY_PORT", 4444);
-	copy_env_string(cfg.deny_exec_prefix, sizeof(cfg.deny_exec_prefix),
-			"NAIVE_EBPF_DENY_EXEC_PREFIX", "/usr/bin/curl");
-	copy_env_string(cfg.deny_path_prefix, sizeof(cfg.deny_path_prefix),
-			"NAIVE_EBPF_DENY_PATH_PREFIX",
-			"/tmp/mcpguard-baseline-deny");
+	cfg.default_action = MCP_GUARD_ACTION_ALLOW;
+	cfg.active_generation = 1;
+
+	err = put_command_rule(command_fd, rule_id++, "/usr/bin/curl");
+	if (err)
+		return err;
+	err = put_command_rule(command_fd, rule_id++, "/usr/bin/wget");
+	if (err)
+		return err;
+	err = put_command_rule(command_fd, rule_id++, "/usr/bin/nc");
+	if (err)
+		return err;
+	err = put_path_rule(path_fd, resource_fd, rule_id++, "/etc/shadow");
+	if (err)
+		return err;
+	err = put_path_rule(path_fd, resource_fd, rule_id++, "/root/");
+	if (err)
+		return err;
+	err = put_path_rule(path_fd, resource_fd, rule_id++, "/home/demo/.ssh/");
+	if (err)
+		return err;
+	err = put_network_rule(network_fd, rule_id++, "0.0.0.0/0",
+			       env_u32("NAIVE_EBPF_DENY_PORT", 4444));
+	if (err)
+		return err;
 
 	return bpf_map_update_elem(config_fd, &key, &cfg, BPF_ANY);
 }
@@ -261,7 +436,11 @@ int main(void)
 		return 1;
 	}
 
-	err = configure_policy(bpf_map__fd(skel->maps.baseline_config_map));
+	err = configure_policy(bpf_map__fd(skel->maps.baseline_config_map),
+			       bpf_map__fd(skel->maps.baseline_path_policy_trie),
+			       bpf_map__fd(skel->maps.baseline_command_policy_trie),
+			       bpf_map__fd(skel->maps.baseline_network_policy_trie),
+			       bpf_map__fd(skel->maps.baseline_resource_policy));
 	if (err) {
 		fprintf(stderr, "failed to configure naive policy: %s\n",
 			strerror(errno));

@@ -7,14 +7,13 @@
 
 #include "include/common.h"
 #include "include/event.h"
-
-#define BASELINE_PREFIX_LEN MCP_GUARD_RULE_VALUE_LEN
+#include "include/policy.h"
 
 struct baseline_config {
 	__u32 enforce;
-	__u32 deny_port;
-	char deny_exec_prefix[BASELINE_PREFIX_LEN];
-	char deny_path_prefix[BASELINE_PREFIX_LEN];
+	__u32 default_action;
+	__u32 active_generation;
+	__u32 reserved;
 };
 
 struct baseline_scratch {
@@ -27,6 +26,37 @@ struct {
 	__type(key, __u32);
 	__type(value, struct baseline_config);
 } baseline_config_map SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_LPM_TRIE);
+	__uint(max_entries, MCP_GUARD_MAX_RULES * 2);
+	__uint(map_flags, BPF_F_NO_PREALLOC);
+	__type(key, struct mcp_path_lpm_key);
+	__type(value, struct mcp_path_policy_value);
+} baseline_path_policy_trie SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_LPM_TRIE);
+	__uint(max_entries, MCP_GUARD_MAX_RULES * 2);
+	__uint(map_flags, BPF_F_NO_PREALLOC);
+	__type(key, struct mcp_command_lpm_key);
+	__type(value, struct mcp_indexed_policy_value);
+} baseline_command_policy_trie SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_LPM_TRIE);
+	__uint(max_entries, MCP_GUARD_MAX_RULES * 2);
+	__uint(map_flags, BPF_F_NO_PREALLOC);
+	__type(key, struct mcp_network_lpm_key);
+	__type(value, struct mcp_indexed_policy_value);
+} baseline_network_policy_trie SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, MCP_GUARD_MAX_RULES * 2);
+	__type(key, struct mcp_resource_policy_key);
+	__type(value, struct mcp_indexed_policy_value);
+} baseline_resource_policy SEC(".maps");
 
 struct {
 	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
@@ -56,6 +86,27 @@ static __always_inline struct baseline_scratch *baseline_scratch(void)
 	__u32 key = 0;
 
 	return bpf_map_lookup_elem(&scratch, &key);
+}
+
+static __always_inline int baseline_action_valid(__u32 action)
+{
+	return action == MCP_GUARD_ACTION_ALLOW ||
+	       action == MCP_GUARD_ACTION_DENY ||
+	       action == MCP_GUARD_ACTION_AUDIT;
+}
+
+static __always_inline __u32 baseline_default_action(struct baseline_config *cfg)
+{
+	if (!cfg || !baseline_action_valid(cfg->default_action))
+		return MCP_GUARD_ACTION_ALLOW;
+	return cfg->default_action;
+}
+
+static __always_inline __u32 baseline_generation(struct baseline_config *cfg)
+{
+	if (!cfg || !cfg->active_generation)
+		return 1;
+	return cfg->active_generation;
 }
 
 static __always_inline __u32 metric_index(__u32 hook_id, __u32 layer, __u32 action)
@@ -102,23 +153,6 @@ static __always_inline void record_metric(__u32 hook_id, __u32 action, __u64 sta
 	metric->buckets[bucket]++;
 }
 
-static __always_inline int has_prefix(const char *value, const char *prefix)
-{
-	if (!prefix[0])
-		return 0;
-
-	for (__u32 i = 0; i < BASELINE_PREFIX_LEN; i++) {
-		char want = prefix[i];
-		char got = value[i];
-
-		if (!want)
-			return 1;
-		if (got != want)
-			return 0;
-	}
-	return 1;
-}
-
 static __always_inline int action_ret(struct baseline_config *cfg, __u32 action)
 {
 	if (action == MCP_GUARD_ACTION_DENY && (!cfg || cfg->enforce))
@@ -157,6 +191,132 @@ static __always_inline __u64 file_resource_id(struct file *file)
 	return BPF_CORE_READ(inode, i_ino);
 }
 
+static __always_inline __u32 baseline_command_decide(struct baseline_config *cfg,
+						     const char *value,
+						     __u32 *rule_id)
+{
+	struct mcp_command_lpm_key key = {};
+	struct mcp_indexed_policy_value *rule;
+	__u32 hook_mask = mcp_guard_hook_mask(MCP_GUARD_HOOK_EXEC);
+
+	if (rule_id)
+		*rule_id = 0;
+	if (!value || !value[0])
+		return baseline_default_action(cfg);
+
+	key.prefixlen = 32 + MCP_GUARD_RULE_VALUE_LEN * 8;
+	key.generation = baseline_generation(cfg);
+	for (__u32 i = 0; i < MCP_GUARD_RULE_VALUE_LEN; i++) {
+		key.command[i] = value[i];
+		if (!value[i])
+			break;
+	}
+
+	rule = bpf_map_lookup_elem(&baseline_command_policy_trie, &key);
+	if (rule && rule->enabled && (rule->hook_mask & hook_mask)) {
+		if (rule_id)
+			*rule_id = rule->rule_id;
+		return baseline_action_valid(rule->action) ?
+			rule->action : MCP_GUARD_ACTION_DENY;
+	}
+
+	return baseline_default_action(cfg);
+}
+
+static __always_inline __u32 baseline_path_decide(struct baseline_config *cfg,
+						  __u32 hook_id,
+						  const char *path,
+						  __u64 resource_id,
+						  __u32 *rule_id)
+{
+	struct mcp_path_lpm_key key = {};
+	struct mcp_path_policy_value *rule;
+	__u32 hook_mask = mcp_guard_hook_mask(hook_id);
+
+	if (rule_id)
+		*rule_id = 0;
+	if (!path || !path[0])
+		return baseline_default_action(cfg);
+
+	key.prefixlen = 32 + MCP_GUARD_PATH_LPM_LEN * 8;
+	key.generation = baseline_generation(cfg);
+	for (__u32 i = 0; i < MCP_GUARD_PATH_LPM_LEN; i++) {
+		key.path[i] = path[i];
+		if (!path[i])
+			break;
+	}
+
+	rule = bpf_map_lookup_elem(&baseline_path_policy_trie, &key);
+	if (rule && rule->enabled && (rule->hook_mask & hook_mask)) {
+		if (rule_id)
+			*rule_id = rule->rule_id;
+		return baseline_action_valid(rule->action) ?
+			rule->action : MCP_GUARD_ACTION_DENY;
+	}
+
+	(void)resource_id;
+	return baseline_default_action(cfg);
+}
+
+static __always_inline __u32 baseline_resource_decide(
+	struct baseline_config *cfg, __u32 rule_type, __u32 hook_id,
+	__u64 resource_id, __u32 *rule_id)
+{
+	struct mcp_resource_policy_key key = {};
+	struct mcp_indexed_policy_value *rule;
+	__u32 hook_mask = mcp_guard_hook_mask(hook_id);
+
+	if (rule_id)
+		*rule_id = 0;
+	if (!resource_id)
+		return baseline_default_action(cfg);
+
+	key.generation = baseline_generation(cfg);
+	key.rule_type = rule_type;
+	key.resource_id = resource_id;
+	rule = bpf_map_lookup_elem(&baseline_resource_policy, &key);
+	if (rule && rule->enabled && (rule->hook_mask & hook_mask)) {
+		if (rule_id)
+			*rule_id = rule->rule_id;
+		return baseline_action_valid(rule->action) ?
+			rule->action : MCP_GUARD_ACTION_DENY;
+	}
+
+	return baseline_default_action(cfg);
+}
+
+static __always_inline __u32 baseline_network_decide(struct baseline_config *cfg,
+						     __u32 ipv4_addr,
+						     __u16 port,
+						     __u32 *rule_id)
+{
+	struct mcp_network_lpm_key key = {};
+	struct mcp_indexed_policy_value *rule;
+	__u32 hook_mask = mcp_guard_hook_mask(MCP_GUARD_HOOK_SOCKET_CONNECT);
+
+	if (rule_id)
+		*rule_id = 0;
+
+	key.prefixlen = 32 + 32 + 32;
+	key.generation = baseline_generation(cfg);
+	key.port = port;
+	key.ipv4_addr = ipv4_addr;
+	rule = bpf_map_lookup_elem(&baseline_network_policy_trie, &key);
+	if (!rule) {
+		key.port = 0;
+		rule = bpf_map_lookup_elem(&baseline_network_policy_trie, &key);
+	}
+
+	if (rule && rule->enabled && (rule->hook_mask & hook_mask)) {
+		if (rule_id)
+			*rule_id = rule->rule_id;
+		return baseline_action_valid(rule->action) ?
+			rule->action : MCP_GUARD_ACTION_DENY;
+	}
+
+	return baseline_default_action(cfg);
+}
+
 SEC("lsm/bprm_check_security")
 int BPF_PROG(naive_bprm_check_security, struct linux_binprm *bprm, int ret)
 {
@@ -165,6 +325,7 @@ int BPF_PROG(naive_bprm_check_security, struct linux_binprm *bprm, int ret)
 	const char *filename_ptr;
 	__u64 start_ns = bpf_ktime_get_ns();
 	__u32 action = MCP_GUARD_ACTION_ALLOW;
+	__u32 rule_id = 0;
 
 	if (ret)
 		return ret;
@@ -178,8 +339,7 @@ int BPF_PROG(naive_bprm_check_security, struct linux_binprm *bprm, int ret)
 	if (filename_ptr)
 		bpf_probe_read_kernel_str(tmp->path, MCP_GUARD_PATH_LEN, filename_ptr);
 
-	if (cfg && has_prefix(tmp->path, cfg->deny_exec_prefix))
-		action = MCP_GUARD_ACTION_DENY;
+	action = baseline_command_decide(cfg, tmp->path, &rule_id);
 
 	record_metric(MCP_GUARD_HOOK_EXEC, action, start_ns);
 	return action_ret(cfg, action);
@@ -191,13 +351,17 @@ int BPF_PROG(naive_file_open, struct file *file, int ret)
 	struct baseline_config *cfg = baseline_config();
 	struct baseline_scratch *tmp = baseline_scratch();
 	__u64 start_ns = bpf_ktime_get_ns();
+	__u64 resource_id = file_resource_id(file);
 	__u32 action = MCP_GUARD_ACTION_ALLOW;
+	__u32 rule_id = 0;
 
 	if (ret)
 		return ret;
-	if (tmp && read_file_path(file, tmp->path) == 0 &&
-	    cfg && has_prefix(tmp->path, cfg->deny_path_prefix))
-		action = MCP_GUARD_ACTION_DENY;
+	if (tmp && read_file_path(file, tmp->path) == 0)
+		action = baseline_path_decide(cfg, MCP_GUARD_HOOK_FILE_OPEN,
+					      tmp->path, resource_id, &rule_id);
+	else
+		action = baseline_default_action(cfg);
 
 	record_metric(MCP_GUARD_HOOK_FILE_OPEN, action, start_ns);
 	return action_ret(cfg, action);
@@ -211,6 +375,7 @@ int BPF_PROG(naive_file_permission, struct file *file, int mask, int ret)
 	__u64 resource_id;
 	__u32 hook_id = MCP_GUARD_HOOK_FILE_READ;
 	__u32 action = MCP_GUARD_ACTION_ALLOW;
+	__u32 rule_id = 0;
 
 	if (ret)
 		return ret;
@@ -219,15 +384,9 @@ int BPF_PROG(naive_file_permission, struct file *file, int mask, int ret)
 	else if (!(mask & MCP_GUARD_MAY_READ))
 		return 0;
 
-	/*
-	 * bpf_d_path() is not available from this LSM hook on all target
-	 * kernels. The naive baseline still performs per-event kernel work and
-	 * policy accounting here, but path-prefix deny decisions are made at
-	 * file_open where path extraction is verifier-accepted.
-	 */
 	resource_id = file_resource_id(file);
-	if (!resource_id && cfg && cfg->deny_path_prefix[0])
-		action = MCP_GUARD_ACTION_ALLOW;
+	action = baseline_resource_decide(cfg, MCP_GUARD_RULE_PATH_PREFIX,
+					  hook_id, resource_id, &rule_id);
 
 	record_metric(hook_id, action, start_ns);
 	return action_ret(cfg, action);
@@ -242,7 +401,9 @@ int BPF_PROG(naive_socket_connect, struct socket *sock, struct sockaddr *address
 	__u64 start_ns = bpf_ktime_get_ns();
 	__u16 family = 0;
 	__u16 port = 0;
+	__u32 ipv4_addr = 0;
 	__u32 action = MCP_GUARD_ACTION_ALLOW;
+	__u32 rule_id = 0;
 
 	(void)sock;
 	(void)addrlen;
@@ -253,8 +414,9 @@ int BPF_PROG(naive_socket_connect, struct socket *sock, struct sockaddr *address
 		if (family == MCP_GUARD_AF_INET) {
 			bpf_probe_read_kernel(&addr4, sizeof(addr4), address);
 			port = bpf_ntohs(addr4.sin_port);
-			if (cfg && cfg->deny_port && port == cfg->deny_port)
-				action = MCP_GUARD_ACTION_DENY;
+			ipv4_addr = addr4.sin_addr.s_addr;
+			action = baseline_network_decide(cfg, ipv4_addr, port,
+							 &rule_id);
 		}
 	}
 
