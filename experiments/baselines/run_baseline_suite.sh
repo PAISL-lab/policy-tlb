@@ -19,12 +19,17 @@ RESULT_BASE="${BASELINE_RESULT_BASE:-${EXPERIMENT_RESULT_BASE:-experiments/resul
 POLICY_DIR="${BASELINE_MCPGUARD_POLICY_DIR:-${MCP_GUARD_POLICY_DIR:-policies}}"
 SOCKET_PORT="${BASELINE_SOCKET_PORT:-45555}"
 COMMAND="${BASELINE_COMMAND:-/usr/bin/true}"
+FOLLOWUP_SWEEP="${BASELINE_FOLLOWUP_SWEEP:-}"
+FOLLOWUP_PER_OPEN="${BASELINE_FOLLOWUP_PER_OPEN:-${EVENTS}}"
+BASELINE_BUILD_DIR="${BASELINE_BUILD_DIR:-${REPO_ROOT}/experiments/baselines/build/workloads}"
+CC="${CC:-cc}"
 TASKSET_BIN="$(command -v taskset || true)"
 TIME_BIN="${TIME_BIN:-/usr/bin/time}"
 
 RESULT_DIR="${REPO_ROOT}/${RESULT_BASE}/$(date +%Y%m%d_%H%M%S)_baseline_independent"
 NAIVE_LOADER=""
 PTRACE_MONITOR=""
+C_FILE_WORKLOAD=""
 ACTIVE_GUARD_PID=""
 
 cleanup() {
@@ -62,6 +67,16 @@ run_with_time() {
   set -e
   echo "${status}" > "${run_dir}/exit_status.txt"
   return "${status}"
+}
+
+build_c_file_workload() {
+  local out="${BASELINE_BUILD_DIR}/baseline_file_io_workload"
+
+  mkdir -p "${BASELINE_BUILD_DIR}"
+  "${CC}" -g -O2 -Wall -Wextra \
+    "${SCRIPT_DIR}/workloads/baseline_file_io_workload.c" \
+    -o "${out}"
+  printf '%s\n' "${out}"
 }
 
 wait_for_log() {
@@ -129,39 +144,75 @@ parse_guard_metrics() {
   fi
 }
 
+run_workload() {
+  local run_dir="$1"
+  local workload="$2"
+  local followup="$3"
+
+  case "${workload}" in
+    file_warm)
+      run_with_time "${run_dir}" "${C_FILE_WORKLOAD}" \
+        --events "${EVENTS}" --workload warm --followup-per-open "${followup}" || true
+      ;;
+    file_cold)
+      run_with_time "${run_dir}" "${C_FILE_WORKLOAD}" \
+        --events "${EVENTS}" --workload cold --followup-per-open "${followup}" || true
+      ;;
+    *)
+      run_with_time "${run_dir}" python3 "${SCRIPT_DIR}/workloads/baseline_workload.py" \
+        --events "${EVENTS}" --workload "${workload}" --port "${SOCKET_PORT}" --command "${COMMAND}" || true
+      ;;
+  esac
+}
+
 run_mode() {
   local mode="$1"
   local workload="$2"
   local run_id="$3"
+  local followup="$4"
   local run_name
   local run_dir
+  local workload_dir
 
   run_name="$(printf 'run_%03d' "${run_id}")"
-  run_dir="${RESULT_DIR}/${mode}/${workload}/${run_name}"
+  workload_dir="${workload}"
+  if [[ "${workload}" == file_* ]]; then
+    workload_dir="${workload}_f${followup}"
+  fi
+  run_dir="${RESULT_DIR}/${mode}/${workload_dir}/${run_name}"
   mkdir -p "${run_dir}"
-  echo "mode=${mode} workload=${workload} run=${run_id} events=${EVENTS}" > "${run_dir}/phase.log"
+  echo "mode=${mode} workload=${workload} run=${run_id} events=${EVENTS} followup_per_open=${followup}" > "${run_dir}/phase.log"
   : > "${run_dir}/guard.log"
 
   case "${mode}" in
     no_guard)
-      run_with_time "${run_dir}" python3 "${SCRIPT_DIR}/workloads/baseline_workload.py" \
-        --events "${EVENTS}" --workload "${workload}" --port "${SOCKET_PORT}" --command "${COMMAND}" || true
+      run_workload "${run_dir}" "${workload}" "${followup}"
       ;;
     naive_ebpf_lsm)
       start_naive_guard "${run_dir}"
-      run_with_time "${run_dir}" python3 "${SCRIPT_DIR}/workloads/baseline_workload.py" \
-        --events "${EVENTS}" --workload "${workload}" --port "${SOCKET_PORT}" --command "${COMMAND}" || true
+      run_workload "${run_dir}" "${workload}" "${followup}"
       stop_active_guard
       ;;
     mcpguard)
       start_mcpguard "${run_dir}"
-      run_with_time "${run_dir}" python3 "${SCRIPT_DIR}/workloads/baseline_workload.py" \
-        --events "${EVENTS}" --workload "${workload}" --port "${SOCKET_PORT}" --command "${COMMAND}" || true
+      run_workload "${run_dir}" "${workload}" "${followup}"
       stop_active_guard
       ;;
     ptrace_monitor)
-      run_with_time "${run_dir}" "${PTRACE_MONITOR}" -- python3 "${SCRIPT_DIR}/workloads/baseline_workload.py" \
-        --events "${EVENTS}" --workload "${workload}" --port "${SOCKET_PORT}" --command "${COMMAND}" || true
+      case "${workload}" in
+        file_warm)
+          run_with_time "${run_dir}" "${PTRACE_MONITOR}" -- "${C_FILE_WORKLOAD}" \
+            --events "${EVENTS}" --workload warm --followup-per-open "${followup}" || true
+          ;;
+        file_cold)
+          run_with_time "${run_dir}" "${PTRACE_MONITOR}" -- "${C_FILE_WORKLOAD}" \
+            --events "${EVENTS}" --workload cold --followup-per-open "${followup}" || true
+          ;;
+        *)
+          run_with_time "${run_dir}" "${PTRACE_MONITOR}" -- python3 "${SCRIPT_DIR}/workloads/baseline_workload.py" \
+            --events "${EVENTS}" --workload "${workload}" --port "${SOCKET_PORT}" --command "${COMMAND}" || true
+          ;;
+      esac
       ;;
     *)
       echo "unknown mode: ${mode}" >&2
@@ -170,6 +221,20 @@ run_mode() {
   esac
 
   parse_guard_metrics "${run_dir}" "${run_id}"
+}
+
+followup_values_for_workload() {
+  local workload="$1"
+
+  if [[ "${workload}" == file_* ]]; then
+    if [[ -n "${FOLLOWUP_SWEEP}" ]]; then
+      tr ',' '\n' <<< "${FOLLOWUP_SWEEP}"
+    else
+      printf '%s\n' "${FOLLOWUP_PER_OPEN}"
+    fi
+  else
+    printf '0\n'
+  fi
 }
 
 main() {
@@ -185,17 +250,24 @@ main() {
   echo "[baseline] building independent baselines"
   NAIVE_LOADER="$("${SCRIPT_DIR}/naive_ebpf_lsm/build.sh")"
   PTRACE_MONITOR="$("${SCRIPT_DIR}/ptrace_monitor/build.sh")"
+  C_FILE_WORKLOAD="$(build_c_file_workload)"
   (cd "${REPO_ROOT}" && make mcp-guard)
 
   echo "[baseline] result_dir=${RESULT_DIR}"
   echo "[baseline] repeats=${REPEATS} events=${EVENTS} workloads=${WORKLOADS}"
+  if [[ -n "${FOLLOWUP_SWEEP}" ]]; then
+    echo "[baseline] followup_sweep=${FOLLOWUP_SWEEP}"
+  fi
 
   IFS=',' read -r -a workload_list <<< "${WORKLOADS}"
   for workload in "${workload_list[@]}"; do
-    for run_id in $(seq 1 "${REPEATS}"); do
-      for mode in no_guard naive_ebpf_lsm mcpguard ptrace_monitor; do
-        echo "[baseline] mode=${mode} workload=${workload} run=${run_id}/${REPEATS}"
-        run_mode "${mode}" "${workload}" "${run_id}"
+    mapfile -t followup_list < <(followup_values_for_workload "${workload}")
+    for followup in "${followup_list[@]}"; do
+      for run_id in $(seq 1 "${REPEATS}"); do
+        for mode in no_guard naive_ebpf_lsm mcpguard ptrace_monitor; do
+          echo "[baseline] mode=${mode} workload=${workload} followup=${followup} run=${run_id}/${REPEATS}"
+          run_mode "${mode}" "${workload}" "${run_id}" "${followup}"
+        done
       done
     done
   done

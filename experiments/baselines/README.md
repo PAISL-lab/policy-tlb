@@ -53,6 +53,21 @@ sudo env BASELINE_WORKLOADS=warm,cold,mixed \
   experiments/baselines/run_baseline_suite.sh
 ```
 
+Follow-up I/O sweep for the clearest MCPGuard cache-benefit experiment:
+
+```bash
+sudo env BASELINE_WORKLOADS=file_warm \
+  BASELINE_FOLLOWUP_SWEEP=1,10,100,1000,10000,100000 \
+  BASELINE_REPEATS=30 \
+  BASELINE_EVENTS_PER_RUN=100000 \
+  experiments/baselines/run_baseline_suite.sh
+```
+
+This C workload keeps the total file read/write event count fixed and varies
+how many follow-up operations occur after each open. Small values behave closer
+to cold access patterns, while large values stress the repeated-FD pattern that
+MCPGuard is designed to optimize through L1 decision reuse.
+
 Results are written under:
 
 ```text
@@ -63,6 +78,7 @@ The generated tables include:
 
 - `tables/baseline_e2e.csv`
 - `tables/baseline_hook_latency.csv`
+- `tables/baseline_followup_sweep.csv`
 - `tables/baseline_syscall_monitor.csv`
 - `tables/baseline_summary.csv`
 - `report.md`

@@ -63,12 +63,24 @@ def parse_workload(path: Path) -> dict[str, int | str]:
         if "=" not in line:
             continue
         key, value = line.strip().split("=", 1)
-        if key in {"events", "file_events", "socket_events", "exec_events", "allow_count", "deny_count", "fail_count"}:
+        if key in {
+            "events",
+            "followup_per_open",
+            "open_events",
+            "file_events",
+            "read_events",
+            "write_events",
+            "socket_events",
+            "exec_events",
+            "allow_count",
+            "deny_count",
+            "fail_count",
+        }:
             try:
                 row[key] = int(value)
             except ValueError:
                 row[key] = 0
-        elif key == "workload":
+        elif key in {"workload", "workload_impl"}:
             row[key] = value
     return row
 
@@ -146,20 +158,29 @@ def collect_rows(result_dir: Path) -> tuple[list[dict], list[dict], list[dict]]:
             continue
         mode = mode_dir.name
         for workload_dir in sorted(path for path in mode_dir.iterdir() if path.is_dir()):
-            workload = workload_dir.name
+            workload_variant = workload_dir.name
             for run_dir in sorted(path for path in workload_dir.iterdir() if path.is_dir()):
                 run_id = parse_run_id(run_dir)
                 elapsed = parse_elapsed(run_dir / "elapsed.txt")
                 workload_info = parse_workload(run_dir / "workload.log")
                 exit_status = (run_dir / "exit_status.txt").read_text(encoding="utf-8", errors="replace").strip() if (run_dir / "exit_status.txt").exists() else ""
+                workload = str(workload_info.get("workload", workload_variant) or workload_variant)
+                workload_impl = str(workload_info.get("workload_impl", "python") or "python")
+                followup_per_open = int(workload_info.get("followup_per_open", 0) or 0)
                 events = int(workload_info.get("events", 0) or 0)
                 elapsed_sec = float(elapsed.get("elapsed_sec", 0.0) or 0.0)
                 e2e_rows.append(
                     {
                         "mode": mode,
                         "workload": workload,
+                        "workload_variant": workload_variant,
+                        "workload_impl": workload_impl,
+                        "followup_per_open": followup_per_open,
                         "run_id": run_id,
                         "events": events,
+                        "open_events": int(workload_info.get("open_events", 0) or 0),
+                        "read_events": int(workload_info.get("read_events", 0) or 0),
+                        "write_events": int(workload_info.get("write_events", 0) or 0),
                         "elapsed_sec": f"{elapsed_sec:.6f}",
                         "user_sec": f"{float(elapsed.get('user_sec', 0.0)):.6f}",
                         "sys_sec": f"{float(elapsed.get('sys_sec', 0.0)):.6f}",
@@ -175,6 +196,9 @@ def collect_rows(result_dir: Path) -> tuple[list[dict], list[dict], list[dict]]:
                         {
                             "mode": mode,
                             "workload": workload,
+                            "workload_variant": workload_variant,
+                            "workload_impl": workload_impl,
+                            "followup_per_open": followup_per_open,
                             "run_id": run_id,
                             "hook": metric["hook"],
                             "layer": metric["layer"],
@@ -191,32 +215,43 @@ def collect_rows(result_dir: Path) -> tuple[list[dict], list[dict], list[dict]]:
 
                 ptrace = parse_ptrace(run_dir / "workload.log")
                 if ptrace:
-                    ptrace_rows.append({"mode": mode, "workload": workload, "run_id": run_id, **ptrace})
+                    ptrace_rows.append(
+                        {
+                            "mode": mode,
+                            "workload": workload,
+                            "workload_variant": workload_variant,
+                            "workload_impl": workload_impl,
+                            "followup_per_open": followup_per_open,
+                            "run_id": run_id,
+                            **ptrace,
+                        }
+                    )
 
     return e2e_rows, latency_rows, ptrace_rows
 
 
 def aggregate_e2e(rows: list[dict]) -> list[dict]:
-    grouped: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    grouped: dict[tuple[str, str, int], list[dict]] = defaultdict(list)
     for row in rows:
-        grouped[(row["mode"], row["workload"])].append(row)
+        grouped[(row["mode"], row["workload"], int(row.get("followup_per_open", 0) or 0))].append(row)
 
-    no_guard_avg: dict[str, float] = {}
-    for (mode, workload), group in grouped.items():
+    no_guard_avg: dict[tuple[str, int], float] = {}
+    for (mode, workload, followup), group in grouped.items():
         if mode != "no_guard":
             continue
-        no_guard_avg[workload] = sum(float(row["elapsed_sec"]) for row in group) / len(group)
+        no_guard_avg[(workload, followup)] = sum(float(row["elapsed_sec"]) for row in group) / len(group)
 
     summary = []
-    for (mode, workload), group in sorted(grouped.items()):
+    for (mode, workload, followup), group in sorted(grouped.items()):
         avg_elapsed = sum(float(row["elapsed_sec"]) for row in group) / len(group)
         avg_events = sum(int(row["events"]) for row in group) / len(group)
-        base = no_guard_avg.get(workload, 0.0)
+        base = no_guard_avg.get((workload, followup), 0.0)
         overhead = ((avg_elapsed - base) / base * 100.0) if base else 0.0
         summary.append(
             {
                 "mode": mode,
                 "workload": workload,
+                "followup_per_open": followup,
                 "runs": len(group),
                 "avg_events": f"{avg_events:.0f}",
                 "avg_elapsed_sec": f"{avg_elapsed:.6f}",
@@ -228,13 +263,22 @@ def aggregate_e2e(rows: list[dict]) -> list[dict]:
 
 
 def aggregate_latency(rows: list[dict]) -> list[dict]:
-    grouped: dict[tuple[str, str, str, str, str], list[dict]] = defaultdict(list)
+    grouped: dict[tuple[str, str, int, str, str, str], list[dict]] = defaultdict(list)
     for row in rows:
-        grouped[(row["mode"], row["workload"], row["hook"], row["layer"], row["action"])].append(row)
+        grouped[
+            (
+                row["mode"],
+                row["workload"],
+                int(row.get("followup_per_open", 0) or 0),
+                row["hook"],
+                row["layer"],
+                row["action"],
+            )
+        ].append(row)
 
     summary = []
     for key, group in sorted(grouped.items()):
-        mode, workload, hook, layer, action = key
+        mode, workload, followup, hook, layer, action = key
         total_count = sum(int(row["count"]) for row in group)
         weighted_avg = (
             sum(int(row["avg_ns"]) * int(row["count"]) for row in group) / total_count
@@ -245,6 +289,7 @@ def aggregate_latency(rows: list[dict]) -> list[dict]:
             {
                 "mode": mode,
                 "workload": workload,
+                "followup_per_open": followup,
                 "hook": hook,
                 "layer": layer,
                 "action": action,
@@ -270,12 +315,12 @@ def write_report(result_dir: Path, e2e_summary: list[dict], latency_summary: lis
         "",
         "## End-to-End Summary",
         "",
-        "| Mode | Workload | Runs | Avg sec | Throughput events/sec | Overhead vs no guard |",
-        "|---|---|---:|---:|---:|---:|",
+        "| Mode | Workload | Follow-up/open | Runs | Avg sec | Throughput events/sec | Overhead vs no guard |",
+        "|---|---|---:|---:|---:|---:|---:|",
     ]
     for row in e2e_summary:
         lines.append(
-            f"| {row['mode']} | {row['workload']} | {row['runs']} | {row['avg_elapsed_sec']} | "
+            f"| {row['mode']} | {row['workload']} | {row['followup_per_open']} | {row['runs']} | {row['avg_elapsed_sec']} | "
             f"{row['avg_throughput_events_per_sec']} | {row['overhead_vs_no_guard_percent']}% |"
         )
 
@@ -284,15 +329,32 @@ def write_report(result_dir: Path, e2e_summary: list[dict], latency_summary: lis
             "",
             "## Hook-Internal Latency Summary",
             "",
-            "| Mode | Workload | Hook | Layer | Action | Count | Weighted avg ns | Approx p95 ns | Approx p99 ns |",
-            "|---|---|---|---|---|---:|---:|---:|---:|",
+            "| Mode | Workload | Follow-up/open | Hook | Layer | Action | Count | Weighted avg ns | Approx p95 ns | Approx p99 ns |",
+            "|---|---|---:|---|---|---|---:|---:|---:|---:|",
         ]
     )
     for row in latency_summary:
         lines.append(
-            f"| {row['mode']} | {row['workload']} | {row['hook']} | {row['layer']} | {row['action']} | "
+            f"| {row['mode']} | {row['workload']} | {row['followup_per_open']} | {row['hook']} | {row['layer']} | {row['action']} | "
             f"{row['count']} | {row['avg_ns_weighted']} | {row['p95_ns_approx_max']} | {row['p99_ns_approx_max']} |"
         )
+
+    sweep_rows = [row for row in e2e_summary if int(row.get("followup_per_open", 0) or 0) > 0]
+    if sweep_rows:
+        lines.extend(
+            [
+                "",
+                "## Follow-up Sweep Summary",
+                "",
+                "| Workload | Follow-up/open | Mode | Avg sec | Overhead vs no guard |",
+                "|---|---:|---|---:|---:|",
+            ]
+        )
+        for row in sweep_rows:
+            lines.append(
+                f"| {row['workload']} | {row['followup_per_open']} | {row['mode']} | "
+                f"{row['avg_elapsed_sec']} | {row['overhead_vs_no_guard_percent']}% |"
+            )
 
     lines.extend(
         [
@@ -329,8 +391,14 @@ def main() -> int:
         [
             "mode",
             "workload",
+            "workload_variant",
+            "workload_impl",
+            "followup_per_open",
             "run_id",
             "events",
+            "open_events",
+            "read_events",
+            "write_events",
             "elapsed_sec",
             "user_sec",
             "sys_sec",
@@ -345,6 +413,9 @@ def main() -> int:
         [
             "mode",
             "workload",
+            "workload_variant",
+            "workload_impl",
+            "followup_per_open",
             "run_id",
             "hook",
             "layer",
@@ -361,7 +432,21 @@ def main() -> int:
     write_csv(
         tables / "baseline_syscall_monitor.csv",
         ptrace_rows,
-        ["mode", "workload", "run_id", "total_syscalls", "read", "write", "open", "exec", "connect", "ptrace_elapsed_sec"],
+        [
+            "mode",
+            "workload",
+            "workload_variant",
+            "workload_impl",
+            "followup_per_open",
+            "run_id",
+            "total_syscalls",
+            "read",
+            "write",
+            "open",
+            "exec",
+            "connect",
+            "ptrace_elapsed_sec",
+        ],
     )
     write_csv(
         tables / "baseline_summary.csv",
@@ -369,6 +454,7 @@ def main() -> int:
         [
             "mode",
             "workload",
+            "followup_per_open",
             "runs",
             "avg_events",
             "avg_elapsed_sec",
@@ -382,6 +468,7 @@ def main() -> int:
         [
             "mode",
             "workload",
+            "followup_per_open",
             "hook",
             "layer",
             "action",
@@ -392,6 +479,20 @@ def main() -> int:
             "p95_ns_approx_max",
             "p99_ns_approx_max",
             "max_ns",
+        ],
+    )
+    write_csv(
+        tables / "baseline_followup_sweep.csv",
+        [row for row in e2e_summary if int(row.get("followup_per_open", 0) or 0) > 0],
+        [
+            "mode",
+            "workload",
+            "followup_per_open",
+            "runs",
+            "avg_events",
+            "avg_elapsed_sec",
+            "avg_throughput_events_per_sec",
+            "overhead_vs_no_guard_percent",
         ],
     )
     (tables / "baseline_raw.json").write_text(

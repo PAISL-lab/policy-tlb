@@ -654,6 +654,33 @@ behavior, background daemon을 완전히 제거할 수 없습니다. 따라서 h
 | Atomic reload / rollback | `30/30` successful runs |
 | End-to-end guard-on overhead | `6.234%` |
 
+follow-up I/O sweep 기반 independent baseline 비교:
+
+| 결과 | 근거 |
+|---|---:|
+| 완료된 baseline run | `720/720` successful runs |
+| 비교 모드 | No Guard, Naive eBPF LSM, MCPGuard, ptrace monitor |
+| Workload volume | follow-up 설정별 `30` repeats, `100000` events |
+| follow-up/open `100000`에서 MCPGuard `file_read` L1 latency | `33.93ns` |
+| follow-up/open `100000`에서 Naive eBPF LSM `file_read` L3 latency | `38.17ns` |
+| follow-up/open `100000`에서 MCPGuard `file_write` L1 latency | `33.74ns` |
+| follow-up/open `100000`에서 Naive eBPF LSM `file_write` L3 latency | `37.61ns` |
+| follow-up/open `100000`에서 MCPGuard `file_read` L1 ratio | `99.881%` |
+| follow-up/open `100000`에서 MCPGuard `file_write` L1 ratio | `99.839%` |
+| follow-up/open `100000`에서 ptrace monitor overhead | No Guard 대비 `4034.736842%` |
+
+이 baseline run은 반복 file I/O에서 최초 policy decision 이후 대부분의 후속
+접근이 MCPGuard L1 fast path로 처리된다는 점을 확인합니다. 높은 follow-up
+설정에서 MCPGuard의 hook-internal `file_read`/`file_write` L1 latency는 독립
+구현한 cacheless Naive eBPF LSM baseline의 L3 latency보다 약 `10-12%` 낮게
+측정되었습니다. 다만 end-to-end elapsed time에서는 MCPGuard와 Naive eBPF LSM의
+차이가 작습니다. hook당 수 ns 차이는 전체 user-space 및 syscall 비용에 묻히기
+때문입니다. 따라서 논문에서는 MCPGuard가 end-to-end 기준으로 Naive eBPF보다
+항상 빠르다고 주장하기보다, full pipeline, resource-id cache, epoch
+invalidation semantics를 유지하면서 최소 cacheless eBPF LSM baseline에 가까운
+end-to-end overhead를 보였고, ptrace 방식보다는 훨씬 낮은 overhead를 보였다고
+해석하는 것이 안전합니다.
+
 해석 제한:
 
 | 결과 유형 | 해석 제한 |
@@ -663,6 +690,8 @@ behavior, background daemon을 완전히 제거할 수 없습니다. 따라서 h
 | LPM Trie depth result | benchmark path에 대한 path extraction과 policy lookup 효과가 포함됩니다. filesystem/cache state는 elapsed workload time에 영향을 줄 수 있습니다. |
 | Reload / rollback success | 테스트한 atomic reload failure/recovery scenario를 검증합니다. 가능한 모든 malformed policy나 runtime failure를 증명하지는 않습니다. |
 | End-to-end overhead | 캡처된 machine에서 포함된 file-I/O workload에 대한 결과입니다. target environment에서 재실행하지 않고 일반화하면 안 됩니다. |
+| Naive eBPF comparison | MCPGuard가 end-to-end time에서 Naive eBPF baseline보다 항상 빠르다고 표현하면 안 됩니다. 측정된 장점은 hook-internal L1 latency와 높은 L1 hit ratio입니다. |
+| Follow-up/open `1` | 이 workload 설정은 `read` event는 생성하지만 균형 잡힌 `write` event를 생성하지 않으므로, read/write 균형 비교는 follow-up/open `10` 이상을 사용해야 합니다. |
 | p50/p95/p99 latency | 별도 debug raw-trace mode를 사용하지 않는 한, percentile은 histogram bucket 기반 근사값입니다. |
 | Thermal readings | 노출된 thermal zone의 최고값이 약 `82C`였습니다. 이 값만으로 throttling을 증명하지는 않지만, 통제 불가능한 환경 요인으로 보고해야 합니다. |
 

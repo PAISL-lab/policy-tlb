@@ -663,6 +663,33 @@ Validated reference results from a controlled local run:
 | Atomic reload / rollback | `30/30` successful runs |
 | End-to-end guard-on overhead | `6.234%` |
 
+Independent baseline comparison from the follow-up I/O sweep:
+
+| Result | Evidence |
+|---|---:|
+| Completed baseline runs | `720/720` successful runs |
+| Compared modes | No Guard, Naive eBPF LSM, MCPGuard, ptrace monitor |
+| Workload volume | `30` repeats, `100000` events per follow-up setting |
+| MCPGuard `file_read` L1 latency at follow-up/open `100000` | `33.93ns` |
+| Naive eBPF LSM `file_read` L3 latency at follow-up/open `100000` | `38.17ns` |
+| MCPGuard `file_write` L1 latency at follow-up/open `100000` | `33.74ns` |
+| Naive eBPF LSM `file_write` L3 latency at follow-up/open `100000` | `37.61ns` |
+| MCPGuard `file_read` L1 ratio at follow-up/open `100000` | `99.881%` |
+| MCPGuard `file_write` L1 ratio at follow-up/open `100000` | `99.839%` |
+| ptrace monitor overhead at follow-up/open `100000` | `4034.736842%` vs No Guard |
+
+The baseline run confirms that repeated file I/O is handled almost entirely by
+the MCPGuard L1 fast path after the initial policy decision. In this workload,
+MCPGuard's hook-internal `file_read` and `file_write` L1 latency is about
+`10-12%` lower than the independent cacheless Naive eBPF LSM baseline's L3
+latency for high follow-up counts. End-to-end elapsed time, however, is close
+between MCPGuard and Naive eBPF LSM because the remaining user-space and syscall
+costs dominate a difference of only a few nanoseconds per hook. The safe
+paper-level interpretation is therefore that MCPGuard preserves the full
+pipeline, resource-id cache, and epoch invalidation semantics while keeping
+end-to-end overhead near a minimal cacheless eBPF LSM baseline, and that it is
+substantially cheaper than ptrace-style syscall tracing.
+
 Interpretation limits:
 
 | Result type | Interpretation limit |
@@ -672,6 +699,8 @@ Interpretation limits:
 | LPM Trie depth result | Includes path extraction and policy lookup effects for the benchmark paths; filesystem and cache state can affect elapsed workload time |
 | Reload / rollback success | Validates the tested atomic reload failure and recovery scenario, not every possible malformed policy or runtime failure |
 | End-to-end overhead | Applies to the included file-I/O workload on the captured machine and should not be generalized without rerunning on the target environment |
+| Naive eBPF comparison | MCPGuard should not be described as consistently faster than the Naive eBPF baseline in end-to-end time; the measured advantage is hook-internal L1 latency and high L1 hit ratio |
+| Follow-up/open `1` | This workload setting generates `read` events but no balanced `write` events, so balanced read/write comparisons should use follow-up/open `10` or higher |
 | p50/p95/p99 latency | Reported percentiles are histogram-bucket approximations unless a separate debug raw-trace mode is used |
 | Thermal readings | The highest exposed thermal zone reached about `82C`; this does not by itself prove throttling, but it should be reported as an uncontrolled environmental factor |
 
