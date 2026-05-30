@@ -661,25 +661,39 @@ follow-up I/O sweep 기반 independent baseline 비교:
 | 완료된 baseline run | `720/720` successful runs |
 | 비교 모드 | No Guard, Naive eBPF LSM, MCPGuard, ptrace monitor |
 | Workload volume | follow-up 설정별 `30` repeats, `100000` events |
-| follow-up/open `100000`에서 MCPGuard `file_read` L1 latency | `33.93ns` |
-| follow-up/open `100000`에서 Naive eBPF LSM `file_read` L3 latency | `38.17ns` |
-| follow-up/open `100000`에서 MCPGuard `file_write` L1 latency | `33.74ns` |
-| follow-up/open `100000`에서 Naive eBPF LSM `file_write` L3 latency | `37.61ns` |
-| follow-up/open `100000`에서 MCPGuard `file_read` L1 ratio | `99.881%` |
-| follow-up/open `100000`에서 MCPGuard `file_write` L1 ratio | `99.839%` |
-| follow-up/open `100000`에서 ptrace monitor overhead | No Guard 대비 `4034.736842%` |
 
-이 baseline run은 반복 file I/O에서 최초 policy decision 이후 대부분의 후속
-접근이 MCPGuard L1 fast path로 처리된다는 점을 확인합니다. 높은 follow-up
-설정에서 MCPGuard의 hook-internal `file_read`/`file_write` L1 latency는 독립
-구현한 cacheless Naive eBPF LSM baseline의 L3 latency보다 약 `10-12%` 낮게
-측정되었습니다. 다만 end-to-end elapsed time에서는 MCPGuard와 Naive eBPF LSM의
-차이가 작습니다. hook당 수 ns 차이는 전체 user-space 및 syscall 비용에 묻히기
-때문입니다. 따라서 논문에서는 MCPGuard가 end-to-end 기준으로 Naive eBPF보다
-항상 빠르다고 주장하기보다, full pipeline, resource-id cache, epoch
-invalidation semantics를 유지하면서 최소 cacheless eBPF LSM baseline에 가까운
-end-to-end overhead를 보였고, ptrace 방식보다는 훨씬 낮은 overhead를 보였다고
-해석하는 것이 안전합니다.
+No Guard 대비 end-to-end elapsed time과 overhead:
+
+| Follow-up/open | No Guard avg sec | Naive eBPF LSM avg sec / overhead | MCPGuard avg sec / overhead | ptrace monitor avg sec / overhead |
+|---:|---:|---:|---:|---:|
+| `1` | `0.887333` / `0.00%` | `0.966667` / `+8.94%` | `0.964000` / `+8.64%` | `4.559333` / `+413.82%` |
+| `10` | `0.158000` / `0.00%` | `0.176333` / `+11.60%` | `0.181333` / `+14.77%` | `1.809000` / `+1044.94%` |
+| `100` | `0.043000` / `0.00%` | `0.061333` / `+42.64%` | `0.062000` / `+44.19%` | `1.399000` / `+3153.49%` |
+| `1000` | `0.036667` / `0.00%` | `0.055333` / `+50.91%` | `0.057333` / `+56.36%` | `1.473667` / `+3919.09%` |
+| `10000` | `0.032000` / `0.00%` | `0.049000` / `+53.13%` | `0.050000` / `+56.25%` | `1.344000` / `+4100.00%` |
+| `100000` | `0.031667` / `0.00%` | `0.045333` / `+43.16%` | `0.049667` / `+56.84%` | `1.309333` / `+4034.74%` |
+
+follow-up/open `100000`에서의 hook-internal 반복 I/O 비교:
+
+| Hook | MCPGuard 주요 경로 | MCPGuard latency | MCPGuard L1 ratio | Naive eBPF LSM 경로 | Naive latency | MCPGuard latency 변화 |
+|---|---|---:|---:|---|---:|---:|
+| `file_read` | L1 Fast Path | `33.93ns` | `99.881%` | 매 이벤트 L3 | `38.17ns` | `-11.11%` |
+| `file_write` | L1 Fast Path | `33.74ns` | `99.839%` | 매 이벤트 L3 | `37.61ns` | `-10.29%` |
+
+이 비교는 세 가지 비용을 분리해서 보여줍니다. No Guard는 보안 hook이 없는
+workload 하한선입니다. Naive eBPF LSM은 관측된 hook마다 cacheless BPF LSM
+policy check를 수행하며, follow-up sweep에서 No Guard 대비 `+8.94%`에서
+`+53.13%` overhead를 보였습니다. MCPGuard는 L1/L2/L3 pipeline, resource-id
+follow-up cache, epoch invalidation semantics를 유지하면서 Naive eBPF LSM과
+가까운 end-to-end 범위에 머물렀고, No Guard 대비 `+8.64%`에서 `+56.84%`
+overhead를 보였습니다. ptrace monitor는 같은 workload에서 훨씬 무거웠으며,
+No Guard 대비 `+413.82%`에서 `+4100.00%` overhead를 보였습니다.
+
+MCPGuard의 cache 효과는 hook-internal 결과에서 가장 명확합니다. 반복
+`file_read`와 `file_write` event는 거의 전부 L1에서 처리되었고, 높은 follow-up
+설정에서 L1 latency는 cacheless Naive eBPF LSM L3 path보다 약 `10-12%` 낮게
+측정되었습니다. 다만 end-to-end elapsed time은 user-space 및 syscall 비용이
+hook당 수 ns 차이를 덮을 수 있으므로 별도로 해석해야 합니다.
 
 해석 제한:
 
